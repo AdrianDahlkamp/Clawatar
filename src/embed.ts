@@ -42,6 +42,7 @@ import {
   updateCameraPresets,
 } from './camera-presets'
 import { loadVRM } from './vrm-loader'
+import { persistModelURL, resolveAutoLoadModelURL, warmConversationActions } from './viewer-autoload'
 
 type AnyCommand = Record<string, any>
 
@@ -172,6 +173,7 @@ async function loadModel(url: string) {
   })
 
   if (isEmbed) warmTintVRMMaterials()
+  persistModelURL(url)
   await playBaseIdle(DEFAULT_BASE_IDLE_ACTION)
 
   ;(window as any).__clawatar = { vrm: true, ready: true }
@@ -180,28 +182,13 @@ async function loadModel(url: string) {
   } catch {}
 
   // Warm common conversational clips after first paint.
-  window.setTimeout(() => {
-    void Promise.allSettled([
-      preloadAction('86_Talking'),
-      preloadAction('88_Thinking'),
-    ])
-  }, 250)
+  warmConversationActions(preloadAction)
 }
 
 async function autoLoad() {
   if (isBgOnly) return
 
-  let configModelUrl = ''
-  try {
-    const resp = await fetch('./clawatar.config.json')
-    if (resp.ok) {
-      const config = await resp.json()
-      configModelUrl = config.model?.url || ''
-    }
-  } catch {}
-
-  const savedUrl = localStorage.getItem('vrm-model-url')
-  const modelUrl = configModelUrl || savedUrl
+  const modelUrl = await resolveAutoLoadModelURL()
   if (!modelUrl) return
 
   try {

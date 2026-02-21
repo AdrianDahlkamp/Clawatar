@@ -23,6 +23,7 @@ import { broadcastSyncCommand } from './sync-bridge'
 import { initAmbientMusic, getMusicState, toggleMusic } from './ambient-music'
 import { initAmbienceMixer } from './ambience-mixer'
 import { state } from './app-state'
+import { persistModelURL, resolveAutoLoadModelURL, warmConversationActions } from './viewer-autoload'
 
 // Debug: expose state + scene for console material inspection
 ;(window as any).__app_state = state
@@ -132,19 +133,7 @@ async function autoLoad() {
     return
   }
 
-  // Try config (fetched at runtime)
-  let configModelUrl = ''
-  try {
-    const resp = await fetch('./clawatar.config.json')
-    if (resp.ok) {
-      const config = await resp.json()
-      configModelUrl = config.model?.url || ''
-    }
-  } catch {}
-
-  // Try localStorage
-  const savedUrl = localStorage.getItem('vrm-model-url')
-  const modelUrl = configModelUrl || savedUrl
+  const modelUrl = await resolveAutoLoadModelURL()
 
   if (modelUrl && !isBgOnly) {
     try {
@@ -161,7 +150,7 @@ async function autoLoad() {
       })
       // Warm-tint materials for high-key anime skin look
       if (isEmbed) warmTintVRMMaterials()
-      localStorage.setItem('vrm-model-url', modelUrl)
+      persistModelURL(modelUrl)
       hideDropPrompt()
       console.log('Auto-loaded model:', modelUrl)
       await playBaseIdle(DEFAULT_BASE_IDLE_ACTION)
@@ -170,12 +159,7 @@ async function autoLoad() {
       try { (window as any).webkit?.messageHandlers?.clawatar?.postMessage({event: 'modelLoaded'}) } catch {}
 
       // Warm common conversational actions after first frame is ready.
-      window.setTimeout(() => {
-        void Promise.allSettled([
-          preloadAction('86_Talking'),
-          preloadAction('88_Thinking'),
-        ])
-      }, 250)
+      warmConversationActions(preloadAction)
 
       // Auto-load room GLB if ?room= param is set
       const roomParam = params.get('room')
