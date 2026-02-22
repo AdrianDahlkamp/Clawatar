@@ -47,6 +47,7 @@ Open `http://localhost:3000` and drop your `.vrm` model onto the page.
 - **Voice input** — speak via your browser's microphone
 - **Voice output** — ElevenLabs TTS (optional, requires API key)
 - **AI conversation** — powered by [OpenClaw](https://github.com/openclaw/openclaw) (optional)
+- **Multi-device routing policy** — action/expression is broadcast to all paired devices, while reply text/audio is routed only to the device that triggered the turn
 
 ### 🏠 3D Scene System (Blender Pipeline)
 - **6 scenes** — Cozy Bedroom 🛏️, Izakaya 🏮, Café ☕, Phone Booth 📞, Sunset Balcony 🌇, Swimming Pool 🏊
@@ -66,7 +67,7 @@ Open `http://localhost:3000` and drop your `.vrm` model onto the page.
 - **Rolling context** — maintains 2-minute transcript window for coherent responses
 
 ### 🔌 Developer-Friendly
-- **WebSocket API** — control everything programmatically
+- **Local WebSocket API** — control everything programmatically on the same machine
 - **Drag & drop** — load any VRM model
 - **Standalone mode** — works without OpenClaw or ElevenLabs
 - **OpenClaw skill** — install as an agent skill for AI-driven avatars
@@ -103,6 +104,16 @@ Edit `clawatar.config.json`:
 {"type": "reset"}
 ```
 
+### Multi-device message split
+
+```json
+{"type":"sync","category":"action","payload":{"actionId":"161_Waving","expression":"happy","expressionWeight":0.8}}
+{"type":"speak_audio","text":"Hello!","audio_url":"https://...","audio_device":"<source_device>","target_device":"<source_device>","reply_device":"<source_device>"}
+```
+
+- `sync/action` is broadcast to keep avatar motion synchronized across all devices.
+- `speak_audio` / `audio_start` / `audio_chunk` / `audio_end` are reply-routed to the focused source device.
+
 ## Architecture
 
 ```
@@ -112,7 +123,7 @@ Browser (localhost:3000)
 ├── Audio-driven lip sync
 └── Chat UI + Emotion Bar
     │
-    │ WebSocket (ws://localhost:8765)
+    │ Local WebSocket (loopback ws://127.0.0.1:8765)
     ▼
 WS Server (server/ws-server.ts)
 ├── Command relay & routing
@@ -126,6 +137,15 @@ OpenClaw Gateway (localhost:18789)
 ├── Session & context management
 └── Persona & memory
 ```
+
+## Apple App Transport Policy (Relay-only)
+
+- iPhone, iPad, and macOS clients use relay transport only (`/ws/client`).
+- Simulator builds follow the same relay-only policy.
+- Direct app WebSocket transport (`ws://127.0.0.1:8765`) is removed from Apple clients.
+- `ws-server.ts` binds loopback (`127.0.0.1`) by default and also rejects non-loopback WS clients as defense in depth. Set `CLAWATAR_ALLOW_REMOTE_WS_CLIENTS=1` only for explicit LAN debugging.
+- Pairing tokens are long-lived; add new devices with `/pair/add-device` instead of creating a new session.
+- Model orchestration path is unchanged: relay bridge -> `ws-server.ts` -> OpenClaw gateway (`:18789`).
 
 ## OpenClaw Skill
 

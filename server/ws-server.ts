@@ -1,7 +1,7 @@
 import { WebSocketServer, WebSocket } from 'ws'
 import { createServer } from 'http'
 import { readFileSync, writeFileSync, mkdirSync, readdirSync, statSync, unlinkSync, existsSync } from 'fs'
-import { join, resolve } from 'path'
+import { dirname, join, resolve } from 'path'
 import { randomUUID } from 'crypto'
 import { networkInterfaces } from 'os'
 import sharp from 'sharp'
@@ -29,9 +29,18 @@ try { config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) } catch {}
 const VITE_PORT = config.server?.vitePort || 3000
 const WS_PORT = config.server?.wsPort || 8765
 const AUDIO_PORT = config.server?.audioPort || 8866
-const SERVER_HOST = '0.0.0.0'
+const ENFORCE_LOOPBACK_WS_CLIENTS = process.env.CLAWATAR_ALLOW_REMOTE_WS_CLIENTS !== '1'
+const SERVER_HOST = ENFORCE_LOOPBACK_WS_CLIENTS ? '127.0.0.1' : '0.0.0.0'
 const AUDIO_CACHE_DIR = resolve(import.meta.dirname ?? '.', '_audio_cache')
 const MAX_CACHE_FILES = 64
+const SYNC_STATE_DIR = resolve(import.meta.dirname ?? '.', 'memory')
+const SYNC_STATE_PATH = resolve(SYNC_STATE_DIR, 'clawatar-sync-state.json')
+const OPENCLAW_SYNC_BACKUP_PATH = process.env.HOME
+  ? join(process.env.HOME, '.openclaw', 'clawatar-sync-state.json')
+  : ''
+
+const ALLOWED_THEME_KEYS = new Set(['sakura', 'sunset', 'ocean', 'night', 'forest', 'lavender', 'minimal'])
+const ALLOWED_CAMERA_PRESETS = new Set(['face', 'portrait', 'full'])
 
 // ElevenLabs config
 const VOICE_ID = process.env.ELEVEN_LABS_VOICE_ID || config.voice?.elevenlabsVoiceId || 'L5vK1xowu0LZIPxjLSl5'
@@ -47,6 +56,9 @@ function getApiKey(): string {
 }
 
 const API_KEY = getApiKey()
+const TRANSPORT_STATUS_KEYWORDS = /(relay|gateway|websocket|ws|8765|18789|连接|连上|本地|直连|鉴权|session|配对|pair)/i
+const BRIDGE_STATUS_URL = process.env.CLAWATAR_BRIDGE_STATUS_URL || 'http://127.0.0.1:8797/status'
+const RELAY_SESSION_STATUS_URL = process.env.CLAWATAR_RELAY_SESSION_STATUS_URL || 'http://127.0.0.1:8797/relay/session-status'
 
 function getLocalNetworkIPs(): string[] {
   const interfaces = networkInterfaces()
@@ -71,12 +83,26 @@ function getPrimaryNetworkIP(): string | null {
   return preferred || localIPs[0]
 }
 
+function isLoopbackAddress(address: string | undefined): boolean {
+  if (!address) return false
+  const normalized = address.trim().toLowerCase()
+  return normalized === '127.0.0.1'
+    || normalized === '::1'
+    || normalized === '::ffff:127.0.0.1'
+}
+
 function getAudioBaseURL(): string {
   const host = process.env.CLAWATAR_PUBLIC_HOST || getPrimaryNetworkIP() || 'localhost'
   return `http://${host}:${actualAudioPort}`
 }
 
 function logNetworkEndpoints() {
+  if (ENFORCE_LOOPBACK_WS_CLIENTS) {
+    console.log(`🌐 VRM Viewer: http://localhost:${VITE_PORT}`)
+    console.log(`🔌 WebSocket (loopback only): ws://127.0.0.1:${WS_PORT}`)
+    return
+  }
+
   const localIPs = getLocalNetworkIPs()
   if (localIPs.length === 0) {
     console.log(`🌐 VRM Viewer: http://localhost:${VITE_PORT}`)
@@ -710,7 +736,8 @@ Critical rules:
 3. Keep it SHORT — 2-4 sentences max unless asked for detail. This is a conversation, not an essay.
 4. Speak naturally, like talking to a friend. No emoji, no URLs.
 5. Use your multimodal memory to be proactive — if you notice something changed or remember a preference, mention it naturally.
-6. Never tell users to manually send WebSocket/gateway JSON commands. If they ask for device speech routing, treat it as an execution request.`
+6. Never tell users to manually send WebSocket/gateway JSON commands. If they ask for device speech routing, treat it as an execution request.
+7. Never guess network topology. Do not claim local-vs-relay connection facts unless those facts were explicitly provided in authoritative context.`
 
 /**
  * Build voice system prompt with dynamic multimodal memory context.
@@ -974,6 +1001,60 @@ function hasExplicitRoutingFields(msg: Record<string, any>): boolean {
   )
 }
 
+function shouldBroadcastMotionSync(msg: Record<string, any>): boolean {
+  const type = typeof msg.type === 'string' ? msg.type.trim().toLowerCase() : ''
+  return type === 'speak' || type === 'speak_audio' || type === 'tts_audio' || type === 'audio_start'
+}
+
+function extractMotionSyncPayload(msg: Record<string, any>): Record<string, any> | null {
+  const actionIdRaw =
+    (typeof msg.action_id === 'string' && msg.action_id)
+    || (typeof msg.actionId === 'string' && msg.actionId)
+    || ''
+  const expressionRaw =
+    (typeof msg.expression === 'string' && msg.expression)
+    || ''
+
+  const actionId = actionIdRaw.trim()
+  const expression = expressionRaw.trim()
+  const expressionWeight =
+    coerceNumber(msg.expression_weight)
+    ?? coerceNumber(msg.expressionWeight)
+
+  if (!actionId && !expression) return null
+
+  const payload: Record<string, any> = {}
+  if (actionId) payload.actionId = actionId
+  if (typeof msg.loop === 'boolean') payload.loop = msg.loop
+  if (typeof msg.category === 'string' && msg.category.trim()) {
+    payload.category = msg.category.trim()
+  }
+  if (expression) payload.expression = expression
+  if (expressionWeight !== null) payload.expressionWeight = expressionWeight
+  return payload
+}
+
+function stripMotionFields(msg: Record<string, any>) {
+  delete msg.action_id
+  delete msg.actionId
+  delete msg.loop
+  delete msg.category
+  delete msg.expression
+  delete msg.expression_weight
+  delete msg.expressionWeight
+}
+
+function broadcastMotionSync(payload: Record<string, any>) {
+  broadcastJSONToClients({
+    type: 'sync',
+    category: 'action',
+    payload,
+    origin: 'backend',
+    ts: Date.now(),
+    backend_version: backendSyncState.version,
+  })
+}
+
 async function dispatchDirectRelaySpeakCommand(
   command: DirectRelaySpeakCommand,
   broadcast: (msg: Record<string, any>) => void,
@@ -1019,12 +1100,15 @@ function summarizeRouteTargets(targets: string[]): string {
   return targets.join(', ')
 }
 
-async function askOpenClaw(userText: string): Promise<string> {
+async function askOpenClaw(
+  userText: string,
+  sessionId: string = config.openclaw?.sessionId || 'vrm-chat',
+): Promise<string> {
   // Use CLI with --json and strip any non-JSON output
   const { execSync } = await import('child_process')
   try {
     const result = execSync(
-      `openclaw agent --message ${JSON.stringify(userText)} --json --session-id ${config.openclaw?.sessionId || 'vrm-chat'} 2>/dev/null`,
+      `openclaw agent --message ${JSON.stringify(userText)} --json --session-id ${JSON.stringify(sessionId)} 2>/dev/null`,
       { encoding: 'utf-8', timeout: 120000 }
     )
     // Strip CLI UI decorations, find the main JSON object
@@ -1066,7 +1150,7 @@ async function askOpenClaw(userText: string): Promise<string> {
         },
         body: JSON.stringify({
           message: userText,
-          session: 'vrm-chat',
+          session: sessionId,
           channel: 'webchat',
         }),
       })
@@ -1161,6 +1245,411 @@ function buildVisualMemoryContext(
   return lines.join('\n')
 }
 
+type ConversationLanguage = 'zh' | 'en'
+
+interface DeviceConversationState {
+  lastSpeechAt: number
+  lastLanguage: ConversationLanguage
+}
+
+const DUPLICATE_USER_SPEECH_WINDOW_MS = 1800
+const USER_SPEECH_SIGNATURE_TTL_MS = 60_000
+const CONVERSATION_GREETING_RESET_MS = 12 * 60 * 1000
+const CONVERSATION_LANGUAGE_MEMORY_MS = 6 * 60 * 60 * 1000
+
+const recentUserSpeechSignatures = new Map<string, number>()
+const conversationStateByDevice = new Map<string, DeviceConversationState>()
+let globalConversationLanguage: ConversationLanguage = 'en'
+
+function resolveSourceDeviceKey(sourceDevice: string | undefined, senderWs: WebSocket): string {
+  const candidate = typeof sourceDevice === 'string' ? sourceDevice.trim() : ''
+  if (candidate) return candidate
+  return findDeviceIdByWs(senderWs) || 'unknown'
+}
+
+function normalizeSpeechTextForDedup(text: string): string {
+  return text
+    .trim()
+    .replace(/\s+/g, ' ')
+    .toLowerCase()
+}
+
+function shouldDropDuplicateUserSpeech(text: string, sourceDeviceKey: string, now: number): boolean {
+  for (const [signature, timestamp] of recentUserSpeechSignatures) {
+    if (now - timestamp > USER_SPEECH_SIGNATURE_TTL_MS) {
+      recentUserSpeechSignatures.delete(signature)
+    }
+  }
+
+  const normalizedText = normalizeSpeechTextForDedup(text)
+  if (!normalizedText) return false
+
+  const signature = `${sourceDeviceKey}::${normalizedText}`
+  const previousTimestamp = recentUserSpeechSignatures.get(signature)
+  recentUserSpeechSignatures.set(signature, now)
+
+  return !!previousTimestamp && now - previousTimestamp <= DUPLICATE_USER_SPEECH_WINDOW_MS
+}
+
+function detectConversationLanguage(text: string): ConversationLanguage | null {
+  const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
+  const latinCount = (text.match(/[A-Za-z]/g) || []).length
+
+  if (zhCount >= 2 && zhCount >= latinCount) return 'zh'
+  if (latinCount >= 3 && zhCount === 0) return 'en'
+  if (latinCount >= 6 && latinCount > zhCount * 2) return 'en'
+  if (zhCount >= 1 && zhCount >= latinCount) return 'zh'
+  return null
+}
+
+function resolvePreferredConversationLanguage(
+  text: string,
+  sourceDeviceKey: string,
+  now: number,
+): ConversationLanguage {
+  const detected = detectConversationLanguage(text)
+  if (detected) return detected
+
+  const previous = conversationStateByDevice.get(sourceDeviceKey)
+  if (previous && now - previous.lastSpeechAt <= CONVERSATION_LANGUAGE_MEMORY_MS) {
+    return previous.lastLanguage
+  }
+
+  return globalConversationLanguage
+}
+
+function shouldUseProactiveGreeting(sourceDeviceKey: string, now: number): boolean {
+  const previous = conversationStateByDevice.get(sourceDeviceKey)
+  if (!previous) return true
+  return now - previous.lastSpeechAt >= CONVERSATION_GREETING_RESET_MS
+}
+
+function recordConversationState(sourceDeviceKey: string, language: ConversationLanguage, now: number): void {
+  conversationStateByDevice.set(sourceDeviceKey, {
+    lastSpeechAt: now,
+    lastLanguage: language,
+  })
+  globalConversationLanguage = language
+
+  for (const [deviceKey, state] of conversationStateByDevice) {
+    if (now - state.lastSpeechAt > CONVERSATION_LANGUAGE_MEMORY_MS) {
+      conversationStateByDevice.delete(deviceKey)
+    }
+  }
+}
+
+function activeCharacterName(): string {
+  return (backendSyncState.profile?.name || 'Reze').trim() || 'Reze'
+}
+
+function buildCharacterPromptContext(): string {
+  const characterName = activeCharacterName()
+  const avatarId = backendSyncState.avatarModel?.id?.trim() || 'unknown'
+  const thumbnailId = backendSyncState.avatarModel?.thumbnailID?.trim() || avatarId
+
+  return [
+    `[Character Context]`,
+    `Character name: ${characterName}`,
+    `Character role: Clawatar virtual avatar companion`,
+    `Avatar id: ${avatarId}`,
+    `Avatar thumbnail id: ${thumbnailId}`,
+    `Transport policy: Apple clients connect via relay only (/ws/client). Local ws://127.0.0.1:8765 is backend-internal bridge hop.`,
+  ].join('\n')
+}
+
+function shouldAttachTransportStatusContext(userText: string): boolean {
+  return TRANSPORT_STATUS_KEYWORDS.test(userText)
+}
+
+interface TransportPromptContext {
+  directive: string
+  bridgeStatus: Record<string, any> | null
+  relayStatus: Record<string, any> | null
+}
+
+async function fetchJSONWithTimeout(url: string, timeoutMs: number): Promise<Record<string, any> | null> {
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), timeoutMs)
+  try {
+    const resp = await fetch(url, { signal: controller.signal })
+    if (!resp.ok) return null
+    const parsed = await resp.json()
+    return isObjectRecord(parsed) ? parsed : null
+  } catch {
+    return null
+  } finally {
+    clearTimeout(timeout)
+  }
+}
+
+function summarizeConnectedDevicesForPrompt(raw: unknown): string {
+  if (!Array.isArray(raw) || raw.length === 0) return 'none'
+
+  const summary = raw
+    .slice(0, 4)
+    .map((item) => {
+      if (!isObjectRecord(item)) return null
+      const name = typeof item.deviceName === 'string' && item.deviceName.trim() ? item.deviceName.trim() : 'Unknown'
+      const type = typeof item.deviceType === 'string' && item.deviceType.trim() ? item.deviceType.trim() : 'unknown'
+      const via = typeof item.via === 'string' && item.via.trim() ? item.via.trim() : 'unknown'
+      return `${name} (${type}, via=${via})`
+    })
+    .filter((value): value is string => !!value)
+
+  if (summary.length === 0) return 'none'
+  const suffix = raw.length > 4 ? ` +${raw.length - 4} more` : ''
+  return summary.join('; ') + suffix
+}
+
+async function buildTransportStatusPromptContext(userText: string): Promise<TransportPromptContext | null> {
+  if (!shouldAttachTransportStatusContext(userText)) {
+    return null
+  }
+
+  const [bridgeStatus, relayStatus] = await Promise.all([
+    fetchJSONWithTimeout(BRIDGE_STATUS_URL, 420),
+    fetchJSONWithTimeout(RELAY_SESSION_STATUS_URL, 420),
+  ])
+
+  const lines: string[] = [
+    '[Transport Facts — Authoritative]',
+    '- Apple clients in this project are relay-only (/ws/client).',
+    '- ws://127.0.0.1:8765 is backend-internal bridge-to-backend hop, not direct app transport.',
+    '- Never claim direct local-network client connection unless runtime status explicitly confirms it.',
+  ]
+
+  if (bridgeStatus) {
+    const relayConnected = bridgeStatus.relay?.connected === true
+    const localConnected = bridgeStatus.localGateway?.connected === true
+    const localEndpoint = typeof bridgeStatus.localGateway?.endpoint === 'string'
+      ? bridgeStatus.localGateway.endpoint
+      : 'unknown'
+    const devicesSummary = summarizeConnectedDevicesForPrompt(bridgeStatus.devices?.connected)
+    lines.push(
+      `[Bridge runtime] relayConnected=${relayConnected}; localBackendConnected=${localConnected}; localEndpoint=${localEndpoint}; devices=${devicesSummary}`,
+    )
+  }
+
+  if (relayStatus) {
+    const gatewayConnected = relayStatus.gatewayConnected === true
+    const connectedClients = Number.isFinite(relayStatus.connectedClients)
+      ? relayStatus.connectedClients
+      : (Array.isArray(relayStatus.connectedDevices) ? relayStatus.connectedDevices.length : 0)
+    const devicesSummary = summarizeConnectedDevicesForPrompt(relayStatus.connectedDevices)
+    lines.push(
+      `[Relay session] gatewayConnected=${gatewayConnected}; connectedClients=${connectedClients}; devices=${devicesSummary}`,
+    )
+  }
+
+  if (!bridgeStatus && !relayStatus) {
+    lines.push('[Runtime status] unavailable. If asked for live topology, state uncertainty instead of guessing.')
+  }
+
+  lines.push('If the user asks about current connection path, answer strictly from these facts/status lines only.')
+  return {
+    directive: lines.join('\n'),
+    bridgeStatus,
+    relayStatus,
+  }
+}
+
+function responseMentionsRelay(text: string): boolean {
+  return /(relay|\/ws\/client|gateway|中继|中转|走relay|relay-only|relay only)/i.test(text)
+}
+
+function responseMentionsInternalBridgeHop(text: string): boolean {
+  return /(internal|backend-internal|bridge hop|后端内部|内部跳点|内部桥接|bridge-to-backend)/i.test(text)
+}
+
+function responseClaimsDirectLocalConnection(text: string): boolean {
+  const denyRelayPatterns = [
+    /not\s+going\s+through\s+relay/i,
+    /不是.*relay/i,
+    /不走\s*relay/i,
+    /绕过.*relay/i,
+  ]
+  if (denyRelayPatterns.some((pattern) => pattern.test(text))) {
+    return true
+  }
+
+  const localPathPatterns = [
+    /local\s+websocket/i,
+    /same\s+local\s+network/i,
+    /ws:\/\/(?:localhost|127\.0\.0\.1):8765/i,
+    /through\s+(?:the\s+)?local/i,
+    /本地.*(?:websocket|ws|8765|直连|局域网)/i,
+    /通过.*本地/i,
+  ]
+  if (!localPathPatterns.some((pattern) => pattern.test(text))) {
+    return false
+  }
+
+  if (responseMentionsInternalBridgeHop(text)) {
+    return false
+  }
+
+  return true
+}
+
+function readBooleanStatus(value: unknown): boolean | null {
+  return typeof value === 'boolean' ? value : null
+}
+
+function readFiniteNumber(value: unknown): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) return value
+  return null
+}
+
+function buildSafeTransportReply(
+  preferredLanguage: ConversationLanguage,
+  transportContext: TransportPromptContext,
+): string {
+  const relayConnected = readBooleanStatus(transportContext.bridgeStatus?.relay?.connected)
+  const localBackendConnected = readBooleanStatus(transportContext.bridgeStatus?.localGateway?.connected)
+  const gatewayConnected = readBooleanStatus(transportContext.relayStatus?.gatewayConnected)
+  const connectedClientsRaw = transportContext.relayStatus?.connectedClients
+  const connectedClients = readFiniteNumber(connectedClientsRaw)
+
+  if (preferredLanguage === 'zh') {
+    const runtimeParts: string[] = []
+    if (relayConnected !== null) runtimeParts.push(`relayConnected=${relayConnected ? '是' : '否'}`)
+    if (gatewayConnected !== null) runtimeParts.push(`gatewayConnected=${gatewayConnected ? '是' : '否'}`)
+    if (localBackendConnected !== null) runtimeParts.push(`internalBridgeConnected=${localBackendConnected ? '是' : '否'}`)
+    if (connectedClients !== null) runtimeParts.push(`connectedClients=${connectedClients}`)
+
+    const runtimeText = runtimeParts.length > 0
+      ? ` 当前运行状态：${runtimeParts.join('，')}。`
+      : ''
+    return `当前策略是 relay-only：iPhone/iPad/macOS 只通过 relay (/ws/client) 鉴权连接。ws://127.0.0.1:8765 只是后端内部 bridge 到 ws-server 的本地跳点，不是客户端直连。${runtimeText}`
+  }
+
+  const runtimeParts: string[] = []
+  if (relayConnected !== null) runtimeParts.push(`relayConnected=${relayConnected}`)
+  if (gatewayConnected !== null) runtimeParts.push(`gatewayConnected=${gatewayConnected}`)
+  if (localBackendConnected !== null) runtimeParts.push(`internalBridgeConnected=${localBackendConnected}`)
+  if (connectedClients !== null) runtimeParts.push(`connectedClients=${connectedClients}`)
+
+  const runtimeText = runtimeParts.length > 0
+    ? ` Runtime status: ${runtimeParts.join('; ')}.`
+    : ''
+  return `Current policy is relay-only for Apple clients: iPhone/iPad/macOS connect via relay (/ws/client). ws://127.0.0.1:8765 is an internal backend bridge hop, not a direct client path.${runtimeText}`
+}
+
+function enforceTransportResponseGuard(
+  responseText: string,
+  preferredLanguage: ConversationLanguage,
+  transportContext: TransportPromptContext | null,
+): string {
+  if (!transportContext) return responseText
+
+  const trimmed = responseText.trim()
+  if (!trimmed) return trimmed
+
+  const mentionsLocalEndpoint = /(127\.0\.0\.1|localhost|8765|local\s+websocket|本地)/i.test(trimmed)
+  const isDirectLocalClaim = responseClaimsDirectLocalConnection(trimmed)
+
+  if (isDirectLocalClaim) {
+    return buildSafeTransportReply(preferredLanguage, transportContext)
+  }
+
+  if (mentionsLocalEndpoint && !responseMentionsInternalBridgeHop(trimmed)) {
+    return buildSafeTransportReply(preferredLanguage, transportContext)
+  }
+
+  if (!responseMentionsRelay(trimmed)) {
+    return buildSafeTransportReply(preferredLanguage, transportContext)
+  }
+
+  return trimmed
+}
+
+function buildConversationPromptDirective(options: {
+  preferredLanguage: ConversationLanguage
+  useProactiveGreeting: boolean
+}): string {
+  const characterName = activeCharacterName()
+  const languageDirective = options.preferredLanguage === 'zh'
+    ? 'For this turn, reply ONLY in Chinese. Do not output English unless the user explicitly switches language.'
+    : 'For this turn, reply ONLY in English. Do not output Chinese unless the user explicitly switches language.'
+
+  let greetingDirective = 'Do not force a new greeting unless the user explicitly asks for one.'
+  if (options.useProactiveGreeting) {
+    if (options.preferredLanguage === 'zh') {
+      greetingDirective = `This is the first message of a new/restarted conversation window. Your opening sentence MUST explicitly include your identity in Chinese (name + role), for example: "我是${characterName}，你的 Clawatar 虚拟角色搭档。"`
+    } else {
+      greetingDirective = `This is the first message of a new/restarted conversation window. Your opening sentence MUST explicitly include your identity in English (name + role), for example: "I'm ${characterName}, your Clawatar avatar companion."`
+    }
+  }
+
+  return [
+    buildCharacterPromptContext(),
+    '[Conversation Style Rules]',
+    languageDirective,
+    greetingDirective,
+    'Keep responses conversational and concise for spoken chat.',
+  ].join('\n')
+}
+
+function enforceConversationResponseStyle(
+  responseText: string,
+  options: {
+    preferredLanguage: ConversationLanguage
+    useProactiveGreeting: boolean
+  },
+): string {
+  const trimmed = responseText.trim()
+  if (!trimmed) return trimmed
+  if (!options.useProactiveGreeting) return trimmed
+
+  const characterName = activeCharacterName()
+  const lower = trimmed.toLowerCase()
+  const hasName = lower.includes(characterName.toLowerCase())
+  const hasRole = /clawatar|avatar companion|virtual avatar|虚拟角色|搭档/i.test(trimmed)
+  if (hasName && hasRole) {
+    return trimmed
+  }
+
+  const identitySentence = options.preferredLanguage === 'zh'
+    ? `我是${characterName}，你的 Clawatar 虚拟角色搭档。`
+    : `I'm ${characterName}, your Clawatar avatar companion.`
+  return `${identitySentence} ${trimmed}`
+}
+
+function violatesLanguagePreference(text: string, preferredLanguage: ConversationLanguage): boolean {
+  const zhCount = (text.match(/[\u4e00-\u9fff]/g) || []).length
+  const latinCount = (text.match(/[A-Za-z]/g) || []).length
+
+  if (preferredLanguage === 'en') {
+    return zhCount >= 2
+  }
+
+  // Allow short English names/acronyms in Chinese replies.
+  return latinCount >= 12 && latinCount > zhCount
+}
+
+async function alignResponseLanguageIfNeeded(
+  responseText: string,
+  preferredLanguage: ConversationLanguage,
+): Promise<string> {
+  const trimmed = responseText.trim()
+  if (!trimmed) return trimmed
+  if (!violatesLanguagePreference(trimmed, preferredLanguage)) return trimmed
+
+  const rewritePrompt = preferredLanguage === 'zh'
+    ? `请把下面这段助手回复改写成自然中文，只保留原意和语气，不要增加新信息，不要 Markdown：\n\n${trimmed}`
+    : `Rewrite this assistant reply into natural English only. Keep the exact meaning and tone, add no new information, no markdown:\n\n${trimmed}`
+
+  const rewriteSession = preferredLanguage === 'zh' ? 'vrm-chat-style-zh' : 'vrm-chat-style-en'
+  try {
+    const rewritten = (await askOpenClaw(rewritePrompt, rewriteSession)).trim()
+    if (!rewritten) return trimmed
+    if (violatesLanguagePreference(rewritten, preferredLanguage)) return trimmed
+    return rewritten
+  } catch {
+    return trimmed
+  }
+}
+
 /**
  * Analyze camera frames using OpenAI Vision API directly.
  * Gateway doesn't support multimodal content, so we call OpenAI directly.
@@ -1170,6 +1659,10 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
   console.log(`User said: "${text}" (from device: ${sourceDevice || 'unknown'})`)
   const startTime = Date.now()
   const audioDevice = sourceDevice || undefined
+  const sourceDeviceKey = resolveSourceDeviceKey(sourceDevice, senderWs)
+  const preferredLanguage = resolvePreferredConversationLanguage(text, sourceDeviceKey, startTime)
+  const useProactiveGreeting = shouldUseProactiveGreeting(sourceDeviceKey, startTime)
+  recordConversationState(sourceDeviceKey, preferredLanguage, startTime)
 
   // Record in multimodal memory (non-blocking)
   // Simple mood detection from text patterns (fast, no API call)
@@ -1186,8 +1679,32 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
 
   // Broadcast helper
   const broadcast = (msg: any) => {
-    if (audioDevice && !hasExplicitRoutingFields(msg)) msg.audio_device = audioDevice
-    const str = JSON.stringify(msg)
+    if (!isObjectRecord(msg)) {
+      const str = JSON.stringify(msg)
+      for (const client of clients) {
+        if (client.readyState === WebSocket.OPEN) client.send(str)
+      }
+      return
+    }
+
+    const outgoing: Record<string, any> = { ...msg }
+
+    if (shouldBroadcastMotionSync(outgoing)) {
+      const syncPayload = extractMotionSyncPayload(outgoing)
+      if (syncPayload) {
+        broadcastMotionSync(syncPayload)
+        // Keep text/audio messages routing-only; motion is now carried by sync/action.
+        stripMotionFields(outgoing)
+      }
+    }
+
+    if (audioDevice && !hasExplicitRoutingFields(outgoing)) {
+      outgoing.audio_device = audioDevice
+      outgoing.target_device = audioDevice
+      outgoing.reply_device = audioDevice
+    }
+
+    const str = JSON.stringify(outgoing)
     for (const client of clients) {
       if (client.readyState === WebSocket.OPEN) client.send(str)
     }
@@ -1366,8 +1883,24 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     console.log(`[hints] Injected ${hints.length} new-person hints`)
   }
 
+  const conversationDirective = buildConversationPromptDirective({
+    preferredLanguage,
+    useProactiveGreeting,
+  })
+  const transportPromptContext = await buildTransportStatusPromptContext(text)
+  if (transportPromptContext) {
+    messages = [
+      { role: 'system', content: transportPromptContext.directive },
+      { role: 'system', content: conversationDirective },
+      ...messages,
+    ]
+  } else {
+    messages = [{ role: 'system', content: conversationDirective }, ...messages]
+  }
+
   /* ── Streaming-audio mode ──────────────────────────────────────── */
-  if (isDeviceStreaming(senderWs)) {
+  const shouldForceBatchTransportReply = !!transportPromptContext
+  if (isDeviceStreaming(senderWs) && !shouldForceBatchTransportReply) {
     try {
       const { text: response, firstChunkMs } = await streamingAudioPipeline(
         messages,
@@ -1401,26 +1934,56 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
       broadcastFn,
     )
 
-    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
-    console.log(`[batch] Response in ${elapsed}s (first audio: ${firstAudioMs}ms, ack: ${ackSent}): "${response.slice(0, 80)}..."`)
+    const baseStyledResponse = enforceConversationResponseStyle(response, {
+      preferredLanguage,
+      useProactiveGreeting,
+    })
+    const alignedResponse = await alignResponseLanguageIfNeeded(baseStyledResponse, preferredLanguage)
+    let styledResponse = enforceConversationResponseStyle(alignedResponse, {
+      preferredLanguage,
+      useProactiveGreeting,
+    })
+    styledResponse = enforceTransportResponseGuard(
+      styledResponse,
+      preferredLanguage,
+      transportPromptContext,
+    )
+    const finalAudioUrl = styledResponse === response ? audioUrl : await generateTTS(styledResponse)
 
-    if (!response || response.includes('NO_REPLY') || response.includes('HEARTBEAT_OK')) {
+    const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
+    console.log(`[batch] Response in ${elapsed}s (first audio: ${firstAudioMs}ms, ack: ${ackSent}): "${styledResponse.slice(0, 80)}..."`)
+
+    if (!styledResponse || styledResponse.includes('NO_REPLY') || styledResponse.includes('HEARTBEAT_OK')) {
       console.log('[batch] No actionable response')
       return
     }
 
     // Broadcast the main response (full text + remaining audio)
-    const { action_id, expression, expression_weight } = pickAction(response)
-    broadcast({ type: 'speak_audio', audio_url: audioUrl, text: response, action_id, expression, expression_weight })
+    const { action_id, expression, expression_weight } = pickAction(styledResponse)
+    broadcast({ type: 'speak_audio', audio_url: finalAudioUrl, text: styledResponse, action_id, expression, expression_weight })
     console.log(`[batch] Broadcast: ${action_id}, ${expression}, device: ${audioDevice || 'all'}`)
   } catch (e: any) {
     console.error('[batch] Pipeline error:', e.message)
     // Fallback: non-streaming
     try {
       const response = await askOpenClaw(text)
-      const { action_id, expression, expression_weight } = pickAction(response)
-      const audioUrl = await generateTTS(response)
-      broadcast({ type: 'speak_audio', audio_url: audioUrl, text: response, action_id, expression, expression_weight })
+      const baseStyledResponse = enforceConversationResponseStyle(response, {
+        preferredLanguage,
+        useProactiveGreeting,
+      })
+      const alignedResponse = await alignResponseLanguageIfNeeded(baseStyledResponse, preferredLanguage)
+      let styledResponse = enforceConversationResponseStyle(alignedResponse, {
+        preferredLanguage,
+        useProactiveGreeting,
+      })
+      styledResponse = enforceTransportResponseGuard(
+        styledResponse,
+        preferredLanguage,
+        transportPromptContext,
+      )
+      const { action_id, expression, expression_weight } = pickAction(styledResponse)
+      const audioUrl = await generateTTS(styledResponse)
+      broadcast({ type: 'speak_audio', audio_url: audioUrl, text: styledResponse, action_id, expression, expression_weight })
     } catch (fallbackErr: any) {
       console.error('[batch] Fallback also failed:', fallbackErr.message)
       broadcast({ type: 'speak', text: "Sorry, I'm having trouble right now.", action_id: '88_Thinking', expression: 'neutral', expression_weight: 0.5 })
@@ -1533,6 +2096,704 @@ function broadcastDeviceList() {
       client.send(msg)
     }
   }
+}
+
+interface BackendProfileState {
+  name: string
+  avatarImageURL?: string
+  avatarInitials?: string
+  updatedAt: number
+}
+
+interface BackendThemeState {
+  theme: string
+  updatedAt: number
+}
+
+interface BackendCameraState {
+  preset: string
+  distance?: number
+  height?: number
+  updatedAt: number
+}
+
+interface BackendAvatarConfigState {
+  autoBlink: boolean
+  idleAnimations: boolean
+  touchReactions: boolean
+  updatedAt: number
+}
+
+interface BackendAvatarModelState {
+  id: string
+  modelURL: string
+  thumbnailID: string
+  updatedAt: number
+}
+
+interface BackendSyncState {
+  version: number
+  updatedAt: number
+  profile?: BackendProfileState
+  theme?: BackendThemeState
+  camera?: BackendCameraState
+  avatarConfig?: BackendAvatarConfigState
+  avatarModel?: BackendAvatarModelState
+}
+
+type SyncValidationResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; code: string; message: string }
+
+const backendSyncState = loadBackendSyncState()
+
+function isObjectRecord(value: unknown): value is Record<string, any> {
+  return !!value && typeof value === 'object' && !Array.isArray(value)
+}
+
+function decodeSyncPayload(raw: unknown): Record<string, any> {
+  if (isObjectRecord(raw)) return raw
+  if (typeof raw !== 'string') return {}
+
+  try {
+    const parsed = JSON.parse(raw)
+    return isObjectRecord(parsed) ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function trimToMax(raw: string, maxLength: number): string {
+  return raw.trim().slice(0, maxLength)
+}
+
+function coerceNumber(raw: unknown): number | null {
+  if (typeof raw === 'number' && Number.isFinite(raw)) return raw
+  if (typeof raw === 'string') {
+    const parsed = Number(raw)
+    if (Number.isFinite(parsed)) return parsed
+  }
+  return null
+}
+
+function coerceBoolean(raw: unknown): boolean | null {
+  if (typeof raw === 'boolean') return raw
+  if (typeof raw === 'number') {
+    if (raw === 1) return true
+    if (raw === 0) return false
+  }
+  if (typeof raw === 'string') {
+    const normalized = raw.trim().toLowerCase()
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
+    if (['0', 'false', 'no', 'off'].includes(normalized)) return false
+  }
+  return null
+}
+
+function isPrivateIPv4Host(host: string): boolean {
+  const parts = host.split('.')
+  if (parts.length !== 4) return false
+
+  const octets = parts.map((part) => Number(part))
+  if (octets.some((octet) => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+    return false
+  }
+
+  const [first, second] = octets
+  if (first === 10 || first === 127 || first === 0) return true
+  if (first === 192 && second === 168) return true
+  if (first === 172 && second >= 16 && second <= 31) return true
+  if (first === 169 && second === 254) return true
+  return false
+}
+
+function isPrivateIPv6Host(host: string): boolean {
+  const normalized = host.toLowerCase()
+  if (normalized === '::1' || normalized === '::') return true
+  if (normalized.startsWith('fe80:')) return true
+  if (normalized.startsWith('fc') || normalized.startsWith('fd')) return true
+  return false
+}
+
+function normalizePublicHTTPURL(raw: unknown): SyncValidationResult<string> {
+  if (typeof raw !== 'string') {
+    return { ok: false, code: 'invalid_url', message: 'URL must be a string.' }
+  }
+
+  const trimmed = raw.trim()
+  if (!trimmed) {
+    return { ok: false, code: 'invalid_url', message: 'URL cannot be empty.' }
+  }
+  if (trimmed.length > 2048) {
+    return { ok: false, code: 'invalid_url', message: 'URL is too long.' }
+  }
+
+  let parsed: URL
+  try {
+    parsed = new URL(trimmed)
+  } catch {
+    return { ok: false, code: 'invalid_url', message: 'URL format is invalid.' }
+  }
+
+  const protocol = parsed.protocol.toLowerCase()
+  if (protocol !== 'https:' && protocol !== 'http:') {
+    return { ok: false, code: 'invalid_url', message: 'Only HTTP(S) URLs are supported.' }
+  }
+
+  const host = parsed.hostname.toLowerCase()
+  if (!host || host === 'localhost' || host.endsWith('.local')) {
+    return { ok: false, code: 'private_host', message: 'Host must be publicly reachable.' }
+  }
+  if (isPrivateIPv4Host(host) || isPrivateIPv6Host(host)) {
+    return { ok: false, code: 'private_host', message: 'Private network URLs are not allowed.' }
+  }
+
+  return { ok: true, value: parsed.toString() }
+}
+
+function buildProfileInitials(name: string): string {
+  const words = name
+    .split(/\s+/)
+    .map(word => word.trim())
+    .filter(Boolean)
+
+  if (words.length === 0) return 'U'
+  if (words.length === 1) {
+    return words[0].slice(0, 2).toUpperCase()
+  }
+  return (words[0][0] + words[1][0]).toUpperCase()
+}
+
+function sanitizeIdentifier(raw: string): string {
+  const trimmed = raw.trim().slice(0, 80)
+  if (!trimmed) return ''
+  return trimmed.replace(/\s+/g, '_')
+}
+
+function inferAvatarIdFromModelURL(modelURL: string): string {
+  try {
+    const parsed = new URL(modelURL)
+    const fileName = parsed.pathname.split('/').pop() || ''
+    const baseName = fileName.replace(/\.[^.]+$/, '')
+    return sanitizeIdentifier(baseName) || 'custom'
+  } catch {
+    return 'custom'
+  }
+}
+
+function normalizeProfilePayload(payload: Record<string, any>): SyncValidationResult<Record<string, any>> {
+  const normalized: Record<string, any> = {}
+  const nameKeys = ['name', 'characterName', 'character_name', 'displayName', 'display_name']
+  const avatarKeys = ['avatarImageURL', 'avatar_image_url', 'avatarURL', 'avatar_url', 'imageURL', 'image_url']
+
+  const providedNameKey = nameKeys.find((key) => payload[key] !== undefined)
+  if (providedNameKey) {
+    const rawName = typeof payload[providedNameKey] === 'string' ? payload[providedNameKey] : ''
+    const name = trimToMax(rawName, 48)
+    if (!name) {
+      return { ok: false, code: 'invalid_profile', message: 'Profile name cannot be empty.' }
+    }
+    normalized.name = name
+    normalized.avatarInitials = buildProfileInitials(name)
+  }
+
+  const providedAvatarKey = avatarKeys.find((key) => payload[key] !== undefined)
+  if (providedAvatarKey) {
+    const rawAvatar = typeof payload[providedAvatarKey] === 'string' ? payload[providedAvatarKey] : ''
+    const trimmed = rawAvatar.trim()
+    if (!trimmed) {
+      normalized.avatarImageURL = ''
+    } else {
+      const validatedURL = normalizePublicHTTPURL(trimmed)
+      if (!validatedURL.ok) {
+        return { ok: false, code: validatedURL.code, message: `Profile avatar URL invalid: ${validatedURL.message}` }
+      }
+      normalized.avatarImageURL = validatedURL.value
+    }
+  }
+
+  if (Object.keys(normalized).length === 0) {
+    return { ok: false, code: 'invalid_profile', message: 'Profile payload must include a name or avatar image URL.' }
+  }
+
+  return { ok: true, value: normalized }
+}
+
+function normalizeThemePayload(payload: Record<string, any>): SyncValidationResult<Record<string, any>> {
+  const rawTheme = typeof payload.theme === 'string' ? payload.theme.trim().toLowerCase() : ''
+  if (!ALLOWED_THEME_KEYS.has(rawTheme)) {
+    return { ok: false, code: 'invalid_theme', message: 'Theme key is unsupported.' }
+  }
+  return { ok: true, value: { theme: rawTheme } }
+}
+
+function normalizeCameraPayload(payload: Record<string, any>): SyncValidationResult<Record<string, any>> {
+  const preset = typeof payload.preset === 'string' ? payload.preset.trim().toLowerCase() : ''
+  if (!ALLOWED_CAMERA_PRESETS.has(preset)) {
+    return { ok: false, code: 'invalid_camera', message: 'Camera preset is unsupported.' }
+  }
+
+  const normalized: Record<string, any> = { preset }
+  const distance = coerceNumber(payload.distance)
+  const height = coerceNumber(payload.height)
+
+  if (distance !== null) {
+    normalized.distance = Math.min(Math.max(distance, 0.5), 2.5)
+  }
+  if (height !== null) {
+    normalized.height = Math.min(Math.max(height, -1.5), 1.5)
+  }
+
+  return { ok: true, value: normalized }
+}
+
+function normalizeAvatarConfigPayload(payload: Record<string, any>): SyncValidationResult<Record<string, any>> {
+  const normalized: Record<string, any> = {}
+
+  const autoBlink = coerceBoolean(payload.autoBlink)
+  const idleAnimations = coerceBoolean(payload.idleAnimations)
+  const touchReactions = coerceBoolean(payload.touchReactions)
+
+  if (autoBlink !== null) normalized.autoBlink = autoBlink
+  if (idleAnimations !== null) normalized.idleAnimations = idleAnimations
+  if (touchReactions !== null) normalized.touchReactions = touchReactions
+
+  if (Object.keys(normalized).length === 0) {
+    return { ok: false, code: 'invalid_avatar_config', message: 'Avatar config payload is empty or invalid.' }
+  }
+
+  return { ok: true, value: normalized }
+}
+
+function normalizeAvatarModelPayload(payload: Record<string, any>): SyncValidationResult<Record<string, any>> {
+  const rawModelURL =
+    (typeof payload.modelURL === 'string' && payload.modelURL)
+    || (typeof payload.model_url === 'string' && payload.model_url)
+    || (typeof payload.url === 'string' && payload.url)
+    || (typeof payload.model === 'string' && payload.model)
+    || ''
+
+  const validatedURL = normalizePublicHTTPURL(rawModelURL)
+  if (!validatedURL.ok) {
+    return { ok: false, code: validatedURL.code, message: `Avatar model URL invalid: ${validatedURL.message}` }
+  }
+
+  const rawID = typeof payload.id === 'string' ? payload.id : ''
+  const rawThumbnailID =
+    (typeof payload.thumbnailID === 'string' && payload.thumbnailID)
+    || (typeof payload.thumbnail_id === 'string' && payload.thumbnail_id)
+    || ''
+
+  const id = sanitizeIdentifier(rawID) || inferAvatarIdFromModelURL(validatedURL.value)
+  const thumbnailID = sanitizeIdentifier(rawThumbnailID) || id
+
+  return {
+    ok: true,
+    value: {
+      id,
+      modelURL: validatedURL.value,
+      thumbnailID,
+    },
+  }
+}
+
+function emptyBackendSyncState(): BackendSyncState {
+  return {
+    version: 1,
+    updatedAt: Date.now(),
+  }
+}
+
+function normalizeLoadedBackendSyncState(raw: unknown): BackendSyncState {
+  if (!isObjectRecord(raw)) return emptyBackendSyncState()
+
+  const base = emptyBackendSyncState()
+  const version = coerceNumber(raw.version)
+  if (version !== null && Number.isFinite(version) && version > 0) {
+    base.version = Math.floor(version)
+  }
+
+  const updatedAt = coerceNumber(raw.updatedAt)
+  if (updatedAt !== null && Number.isFinite(updatedAt) && updatedAt > 0) {
+    base.updatedAt = Math.floor(updatedAt)
+  }
+
+  if (isObjectRecord(raw.profile) && typeof raw.profile.name === 'string' && raw.profile.name.trim()) {
+    const profileName = trimToMax(raw.profile.name, 48)
+    base.profile = {
+      name: profileName,
+      avatarImageURL: typeof raw.profile.avatarImageURL === 'string' ? raw.profile.avatarImageURL.trim() || undefined : undefined,
+      avatarInitials: typeof raw.profile.avatarInitials === 'string'
+        ? trimToMax(raw.profile.avatarInitials, 4).toUpperCase()
+        : buildProfileInitials(profileName),
+      updatedAt: Math.floor(coerceNumber(raw.profile.updatedAt) ?? base.updatedAt),
+    }
+  }
+
+  if (isObjectRecord(raw.theme) && typeof raw.theme.theme === 'string') {
+    const theme = raw.theme.theme.trim().toLowerCase()
+    if (ALLOWED_THEME_KEYS.has(theme)) {
+      base.theme = {
+        theme,
+        updatedAt: Math.floor(coerceNumber(raw.theme.updatedAt) ?? base.updatedAt),
+      }
+    }
+  }
+
+  if (isObjectRecord(raw.camera) && typeof raw.camera.preset === 'string') {
+    const preset = raw.camera.preset.trim().toLowerCase()
+    if (ALLOWED_CAMERA_PRESETS.has(preset)) {
+      base.camera = {
+        preset,
+        distance: coerceNumber(raw.camera.distance) ?? undefined,
+        height: coerceNumber(raw.camera.height) ?? undefined,
+        updatedAt: Math.floor(coerceNumber(raw.camera.updatedAt) ?? base.updatedAt),
+      }
+    }
+  }
+
+  if (isObjectRecord(raw.avatarConfig)) {
+    const autoBlink = coerceBoolean(raw.avatarConfig.autoBlink)
+    const idleAnimations = coerceBoolean(raw.avatarConfig.idleAnimations)
+    const touchReactions = coerceBoolean(raw.avatarConfig.touchReactions)
+    if (autoBlink !== null && idleAnimations !== null && touchReactions !== null) {
+      base.avatarConfig = {
+        autoBlink,
+        idleAnimations,
+        touchReactions,
+        updatedAt: Math.floor(coerceNumber(raw.avatarConfig.updatedAt) ?? base.updatedAt),
+      }
+    }
+  }
+
+  if (isObjectRecord(raw.avatarModel)
+    && typeof raw.avatarModel.id === 'string'
+    && typeof raw.avatarModel.modelURL === 'string') {
+    base.avatarModel = {
+      id: sanitizeIdentifier(raw.avatarModel.id) || 'custom',
+      modelURL: raw.avatarModel.modelURL,
+      thumbnailID: sanitizeIdentifier(String(raw.avatarModel.thumbnailID ?? raw.avatarModel.id)) || 'custom',
+      updatedAt: Math.floor(coerceNumber(raw.avatarModel.updatedAt) ?? base.updatedAt),
+    }
+  }
+
+  return base
+}
+
+function loadBackendSyncState(): BackendSyncState {
+  try {
+    mkdirSync(SYNC_STATE_DIR, { recursive: true })
+  } catch {}
+
+  const candidates = [SYNC_STATE_PATH, OPENCLAW_SYNC_BACKUP_PATH].filter(Boolean)
+  for (const candidate of candidates) {
+    try {
+      if (!existsSync(candidate)) continue
+      const raw = JSON.parse(readFileSync(candidate, 'utf-8'))
+      const normalized = normalizeLoadedBackendSyncState(raw)
+      console.log(`[sync] Loaded backend state from ${candidate}`)
+      return normalized
+    } catch (error: any) {
+      console.warn(`[sync] Failed to load sync state from ${candidate}: ${error?.message || error}`)
+    }
+  }
+
+  return emptyBackendSyncState()
+}
+
+function persistBackendSyncState() {
+  const serialized = JSON.stringify(backendSyncState, null, 2)
+
+  const targets = [SYNC_STATE_PATH, OPENCLAW_SYNC_BACKUP_PATH].filter(Boolean)
+  for (const targetPath of targets) {
+    try {
+      mkdirSync(dirname(targetPath), { recursive: true })
+      writeFileSync(targetPath, serialized)
+    } catch (error: any) {
+      console.warn(`[sync] Failed to persist state to ${targetPath}: ${error?.message || error}`)
+    }
+  }
+}
+
+function touchBackendSyncState() {
+  backendSyncState.version = Math.max(1, Math.floor(backendSyncState.version || 1)) + 1
+  backendSyncState.updatedAt = Date.now()
+  persistBackendSyncState()
+}
+
+function buildBackendStateSnapshotPayload(): Record<string, any> {
+  const payload: Record<string, any> = {
+    meta: {
+      version: backendSyncState.version,
+      updatedAt: backendSyncState.updatedAt,
+    },
+  }
+
+  if (backendSyncState.profile) {
+    payload.profile = {
+      name: backendSyncState.profile.name,
+      avatarImageURL: backendSyncState.profile.avatarImageURL || '',
+      avatarInitials: backendSyncState.profile.avatarInitials || buildProfileInitials(backendSyncState.profile.name),
+    }
+  }
+
+  if (backendSyncState.theme) {
+    payload.theme = { theme: backendSyncState.theme.theme }
+  }
+
+  if (backendSyncState.camera) {
+    payload.camera = {
+      preset: backendSyncState.camera.preset,
+      ...(backendSyncState.camera.distance !== undefined ? { distance: backendSyncState.camera.distance } : {}),
+      ...(backendSyncState.camera.height !== undefined ? { height: backendSyncState.camera.height } : {}),
+    }
+  }
+
+  if (backendSyncState.avatarConfig) {
+    payload.avatar_config = {
+      autoBlink: backendSyncState.avatarConfig.autoBlink,
+      idleAnimations: backendSyncState.avatarConfig.idleAnimations,
+      touchReactions: backendSyncState.avatarConfig.touchReactions,
+    }
+  }
+
+  if (backendSyncState.avatarModel) {
+    payload.avatar_model = {
+      id: backendSyncState.avatarModel.id,
+      modelURL: backendSyncState.avatarModel.modelURL,
+      thumbnailID: backendSyncState.avatarModel.thumbnailID,
+    }
+  }
+
+  return payload
+}
+
+function sendJSONToClient(target: WebSocket, payload: Record<string, any>) {
+  if (target.readyState !== WebSocket.OPEN) return
+  target.send(JSON.stringify(payload))
+}
+
+function broadcastJSONToClients(payload: Record<string, any>) {
+  const encoded = JSON.stringify(payload)
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(encoded)
+    }
+  }
+}
+
+function sendSyncError(target: WebSocket, category: string, code: string, message: string) {
+  sendJSONToClient(target, {
+    type: 'sync_error',
+    category,
+    code,
+    message,
+    ts: Date.now(),
+  })
+}
+
+function sendBackendStateSnapshot(target: WebSocket, requester?: string) {
+  const envelope: Record<string, any> = {
+    type: 'sync',
+    category: 'state_snapshot',
+    payload: buildBackendStateSnapshotPayload(),
+    origin: 'backend',
+    ts: Date.now(),
+  }
+  if (requester) {
+    envelope.requester = requester
+  }
+  sendJSONToClient(target, envelope)
+}
+
+function applyBackendProfileUpdate(patch: Record<string, any>): Record<string, any> {
+  const current = backendSyncState.profile || {
+    name: 'Reze',
+    avatarInitials: 'R',
+    updatedAt: 0,
+  }
+
+  const next: BackendProfileState = {
+    ...current,
+    updatedAt: Date.now(),
+  }
+
+  if (typeof patch.name === 'string') {
+    next.name = patch.name
+    next.avatarInitials = typeof patch.avatarInitials === 'string'
+      ? trimToMax(patch.avatarInitials, 4).toUpperCase()
+      : buildProfileInitials(patch.name)
+  }
+
+  if (typeof patch.avatarImageURL === 'string') {
+    next.avatarImageURL = patch.avatarImageURL || undefined
+  }
+
+  backendSyncState.profile = next
+  touchBackendSyncState()
+
+  return {
+    name: next.name,
+    avatarImageURL: next.avatarImageURL || '',
+    avatarInitials: next.avatarInitials || buildProfileInitials(next.name),
+  }
+}
+
+function applyBackendThemeUpdate(patch: Record<string, any>): Record<string, any> {
+  backendSyncState.theme = {
+    theme: patch.theme,
+    updatedAt: Date.now(),
+  }
+  touchBackendSyncState()
+  return { theme: backendSyncState.theme.theme }
+}
+
+function applyBackendCameraUpdate(patch: Record<string, any>): Record<string, any> {
+  const current = backendSyncState.camera || {
+    preset: 'portrait',
+    updatedAt: 0,
+  }
+
+  backendSyncState.camera = {
+    preset: patch.preset,
+    distance: patch.distance ?? current.distance,
+    height: patch.height ?? current.height,
+    updatedAt: Date.now(),
+  }
+  touchBackendSyncState()
+
+  return {
+    preset: backendSyncState.camera.preset,
+    ...(backendSyncState.camera.distance !== undefined ? { distance: backendSyncState.camera.distance } : {}),
+    ...(backendSyncState.camera.height !== undefined ? { height: backendSyncState.camera.height } : {}),
+  }
+}
+
+function applyBackendAvatarConfigUpdate(patch: Record<string, any>): Record<string, any> {
+  const current = backendSyncState.avatarConfig || {
+    autoBlink: true,
+    idleAnimations: true,
+    touchReactions: true,
+    updatedAt: 0,
+  }
+
+  backendSyncState.avatarConfig = {
+    autoBlink: typeof patch.autoBlink === 'boolean' ? patch.autoBlink : current.autoBlink,
+    idleAnimations: typeof patch.idleAnimations === 'boolean' ? patch.idleAnimations : current.idleAnimations,
+    touchReactions: typeof patch.touchReactions === 'boolean' ? patch.touchReactions : current.touchReactions,
+    updatedAt: Date.now(),
+  }
+  touchBackendSyncState()
+
+  return {
+    autoBlink: backendSyncState.avatarConfig.autoBlink,
+    idleAnimations: backendSyncState.avatarConfig.idleAnimations,
+    touchReactions: backendSyncState.avatarConfig.touchReactions,
+  }
+}
+
+function applyBackendAvatarModelUpdate(patch: Record<string, any>): Record<string, any> {
+  backendSyncState.avatarModel = {
+    id: patch.id,
+    modelURL: patch.modelURL,
+    thumbnailID: patch.thumbnailID,
+    updatedAt: Date.now(),
+  }
+  touchBackendSyncState()
+  return {
+    id: backendSyncState.avatarModel.id,
+    modelURL: backendSyncState.avatarModel.modelURL,
+    thumbnailID: backendSyncState.avatarModel.thumbnailID,
+  }
+}
+
+function handleAuthoritativeSyncEnvelope(parsed: Record<string, any>, senderWs: WebSocket): boolean {
+  const categoryRaw = typeof parsed.category === 'string' ? parsed.category : ''
+  if (!categoryRaw) return false
+
+  const category = categoryRaw.toLowerCase()
+  const payload = decodeSyncPayload(parsed.payload)
+  const senderOrigin = typeof parsed.origin === 'string' && parsed.origin.trim()
+    ? parsed.origin.trim()
+    : (findDeviceIdByWs(senderWs) || 'unknown')
+
+  if (category === 'state_request') {
+    sendBackendStateSnapshot(senderWs, senderOrigin)
+    return true
+  }
+
+  if (category === 'state_snapshot') {
+    sendSyncError(senderWs, category, 'read_only', 'state_snapshot is generated by backend only.')
+    return true
+  }
+
+  const broadcast = (normalizedCategory: string, normalizedPayload: Record<string, any>) => {
+    broadcastJSONToClients({
+      type: 'sync',
+      category: normalizedCategory,
+      payload: normalizedPayload,
+      origin: senderOrigin,
+      ts: Date.now(),
+      backend_version: backendSyncState.version,
+    })
+  }
+
+  if (category === 'profile' || category === 'profile_update') {
+    const validated = normalizeProfilePayload(payload)
+    if (!validated.ok) {
+      sendSyncError(senderWs, category, validated.code, validated.message)
+      return true
+    }
+    const normalizedPayload = applyBackendProfileUpdate(validated.value)
+    broadcast('profile', normalizedPayload)
+    return true
+  }
+
+  if (category === 'theme') {
+    const validated = normalizeThemePayload(payload)
+    if (!validated.ok) {
+      sendSyncError(senderWs, category, validated.code, validated.message)
+      return true
+    }
+    const normalizedPayload = applyBackendThemeUpdate(validated.value)
+    broadcast('theme', normalizedPayload)
+    return true
+  }
+
+  if (category === 'camera') {
+    const validated = normalizeCameraPayload(payload)
+    if (!validated.ok) {
+      sendSyncError(senderWs, category, validated.code, validated.message)
+      return true
+    }
+    const normalizedPayload = applyBackendCameraUpdate(validated.value)
+    broadcast('camera', normalizedPayload)
+    return true
+  }
+
+  if (category === 'avatar_config') {
+    const validated = normalizeAvatarConfigPayload(payload)
+    if (!validated.ok) {
+      sendSyncError(senderWs, category, validated.code, validated.message)
+      return true
+    }
+    const normalizedPayload = applyBackendAvatarConfigUpdate(validated.value)
+    broadcast('avatar_config', normalizedPayload)
+    return true
+  }
+
+  if (category === 'avatar_model' || category === 'avatar_update') {
+    const validated = normalizeAvatarModelPayload(payload)
+    if (!validated.ok) {
+      sendSyncError(senderWs, category, validated.code, validated.message)
+      return true
+    }
+    const normalizedPayload = applyBackendAvatarModelUpdate(validated.value)
+    broadcast('avatar_model', normalizedPayload)
+    return true
+  }
+
+  return false
 }
 
 // --- Multimodal Memory: Setup ---
@@ -1825,7 +3086,14 @@ function handleSlashCommand(text: string): any | null {
 const wss = new WebSocketServer({ port: WS_PORT, host: SERVER_HOST })
 const clients = new Set<WebSocket>()
 
-wss.on('connection', (ws) => {
+wss.on('connection', (ws, req) => {
+  const remoteAddress = req.socket.remoteAddress
+  if (ENFORCE_LOOPBACK_WS_CLIENTS && !isLoopbackAddress(remoteAddress)) {
+    console.warn(`[ws-guard] Rejected non-loopback client ${remoteAddress || 'unknown'} (relay-only policy).`)
+    ws.close(1008, 'relay-only')
+    return
+  }
+
   clients.add(ws)
   console.log(`Client connected (${clients.size} total)`)
 
@@ -2072,6 +3340,8 @@ wss.on('connection', (ws) => {
       ws.send(JSON.stringify({ type: 'registered', deviceId: info.deviceId, connectedDevices: getDeviceList() }))
       // Notify all devices of the updated device list
       broadcastDeviceList()
+      // Push backend-authoritative snapshot immediately on registration.
+      sendBackendStateSnapshot(ws, info.deviceId)
       console.log(`Device registered: ${info.name} (${info.deviceType}) — ${devices.size} devices total`)
       return
     }
@@ -2205,6 +3475,14 @@ wss.on('connection', (ws) => {
 
     // Handle user_speech — check for slash commands first, then send to OpenClaw agent
     if (parsed?.type === 'user_speech' && parsed.text) {
+      const sourceDevice = parsed.source_device || findDeviceIdByWs(ws)
+      const sourceDeviceKey = resolveSourceDeviceKey(sourceDevice, ws)
+      const now = Date.now()
+      if (shouldDropDuplicateUserSpeech(parsed.text, sourceDeviceKey, now)) {
+        console.log(`[dedup] Dropped duplicate user_speech from ${sourceDeviceKey}: "${String(parsed.text).slice(0, 80)}"`)
+        return
+      }
+
       const slashResponse = handleSlashCommand(parsed.text)
       if (slashResponse) {
         // Slash command handled locally — broadcast response with buttons
@@ -2228,7 +3506,6 @@ wss.on('connection', (ws) => {
       }
 
       // Pass source_device for focus-based audio routing
-      const sourceDevice = parsed.source_device || findDeviceIdByWs(ws)
       handleUserSpeech(parsed.text, ws, sourceDevice).catch(e => {
         console.error('User speech handling error:', e.message)
         ws.send(JSON.stringify({ type: 'tts_error', message: e.message }))
@@ -2240,6 +3517,14 @@ wss.on('connection', (ws) => {
     if (parsed?.status) {
       // Status messages are replies to the sender only; don't flood other clients
       return
+    }
+
+    // Backend-authoritative sync handling.
+    if (parsed?.type === 'sync' && isObjectRecord(parsed)) {
+      const handled = handleAuthoritativeSyncEnvelope(parsed, ws)
+      if (handled) {
+        return
+      }
     }
 
     // Default: broadcast to all other clients
@@ -2265,7 +3550,10 @@ wss.on('connection', (ws) => {
   })
 })
 
-console.log(`WebSocket server running on ws://0.0.0.0:${WS_PORT}`)
+console.log(`WebSocket server running on ws://${SERVER_HOST}:${WS_PORT}`)
+if (ENFORCE_LOOPBACK_WS_CLIENTS) {
+  console.log(`[ws-guard] Loopback-only client policy enabled. Set CLAWATAR_ALLOW_REMOTE_WS_CLIENTS=1 to allow remote WS clients.`)
+}
 logNetworkEndpoints()
 
 // stdin relay

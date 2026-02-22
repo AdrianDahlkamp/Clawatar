@@ -89,7 +89,7 @@
 - [ ] **VR/AR mode** — WebXR support
 - [ ] **Live streaming** — OBS/VTuber integration
 - [ ] **Multi-character** — multiple VRM avatars in one scene
-- [ ] **Tailscale access** — secure remote viewing from anywhere
+- [ ] **Remote web access** — secure browser viewing from anywhere (Apple app transport remains relay-only)
 
 ## Design Principles
 1. **Web-first** — runs in any modern browser, no install needed

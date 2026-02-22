@@ -62,5 +62,27 @@ Solution: `applyExpressionOverrides()` runs after mixer update, layering our
 desired expressions on top of animation data.
 
 ### OpenClaw Integration
-The WS server bridges to OpenClaw via CLI (`openclaw agent --json`).
-User messages → OpenClaw → AI response → action selection → TTS → browser.
+`server/ws-server.ts` talks to OpenClaw in this order:
+
+1. Preferred: OpenClaw Gateway streaming API (`http://127.0.0.1:18789/v1/chat/completions`).
+2. Fallback: `openclaw agent --json` CLI.
+3. Last resort fallback: OpenClaw gateway `/api/agent`.
+
+Pipeline summary:
+- `user_speech` in
+- OpenClaw response generation
+- action/expression pick
+- TTS (`speak_audio` or streaming `audio_*`)
+- sync + audio broadcast to clients
+
+### Transport Matrix
+
+- Local web frontend:
+  - Browser (`localhost:3000`) -> local WS `ws://127.0.0.1:8765` -> `ws-server.ts` -> OpenClaw.
+- Apple app (iPhone/iPad/macOS):
+  - App -> Relay `/ws/client` -> relay bridge `/ws/gateway` -> `ws-server.ts` (`ws://127.0.0.1:8765`) -> OpenClaw.
+
+Important:
+- Apple app does not connect directly to `:8765` or `:18789`.
+- `ws-server.ts` is loopback-only by default (`CLAWATAR_ALLOW_REMOTE_WS_CLIENTS=1` disables this for LAN debugging).
+- `gateway-relay-bridge.mjs` should point to app backend WS protocol (`:8765`), not OpenClaw gateway WS.

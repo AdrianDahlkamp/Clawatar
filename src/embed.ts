@@ -29,7 +29,7 @@ import {
   updateExpressionTransitions,
 } from './expressions'
 import { initTouchReactions, setTouchReactionsEnabled } from './touch-reactions'
-import { DEFAULT_BASE_IDLE_ACTION, loadAndPlayAction, playBaseIdle, preloadAction } from './animation'
+import { DEFAULT_BASE_IDLE_ACTION, playBaseIdle, preloadAction } from './animation'
 import { updateBreathing } from './breathing'
 import { applyThemeParticles, initBackgrounds, updateBackgroundEffects } from './backgrounds'
 import { initGradientBackground, setGradientTheme, updateGradientBackground } from './gradient-background'
@@ -43,6 +43,7 @@ import {
 } from './camera-presets'
 import { loadVRM } from './vrm-loader'
 import { persistModelURL, resolveAutoLoadModelURL, warmConversationActions } from './viewer-autoload'
+import { requestAction } from './action-state-machine'
 
 type AnyCommand = Record<string, any>
 
@@ -198,6 +199,20 @@ async function autoLoad() {
   }
 }
 
+async function playRequestedAction(actionId: string, loop: boolean, category?: string) {
+  try {
+    await requestAction(actionId, {
+      sync: false,
+      loop,
+      category,
+    })
+  } catch (error) {
+    console.error('[embed] play action failed:', actionId, error)
+    resetExpressionsImmediately()
+    await playBaseIdle(DEFAULT_BASE_IDLE_ACTION)
+  }
+}
+
 async function handleSyncCommand(cmd: AnyCommand) {
   const category = String(cmd.category ?? '').toLowerCase()
   const payload = (cmd.payload && typeof cmd.payload === 'object') ? cmd.payload as AnyCommand : {}
@@ -244,7 +259,7 @@ async function handleSyncCommand(cmd: AnyCommand) {
       }
 
       if (actionId) {
-        await loadAndPlayAction(actionId, loop, undefined, actionCategory)
+        await playRequestedAction(actionId, loop, actionCategory)
       }
       break
     }
@@ -327,10 +342,9 @@ async function handleCommand(cmd: AnyCommand) {
         } else {
           resetExpressionsImmediately()
         }
-        await loadAndPlayAction(
+        await playRequestedAction(
           cmd.action_id,
           typeof cmd.loop === 'boolean' ? cmd.loop : false,
-          undefined,
           typeof cmd.category === 'string' ? cmd.category : undefined
         )
       }

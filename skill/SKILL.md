@@ -7,6 +7,8 @@ description: Give your AI agent a 3D VRM avatar body with animations, expression
 
 Give your AI agent a body. Web-based VRM avatar with 162 animations, expressions, TTS lip sync, and AI chat.
 
+> Transport note: `ws://127.0.0.1:8765` in this skill is for local web viewer control/dev only. Apple clients (iPhone/iPad/macOS) use relay-only transport.
+
 ## Install & Start
 
 ```bash
@@ -18,13 +20,13 @@ cd ~/.openclaw/workspace/clawatar && npm install
 npm run start
 ```
 
-Opens at http://localhost:3000 with WS control at ws://localhost:8765.
+Opens at http://localhost:3000 with WS control at ws://127.0.0.1:8765.
 
 Users must provide their own VRM model (drag & drop onto page, or set `model.url` in `clawatar.config.json`).
 
 ## WebSocket Commands
 
-Send JSON to `ws://localhost:8765`:
+Send JSON to `ws://127.0.0.1:8765`:
 
 ### play_action
 ```json
@@ -68,7 +70,7 @@ Full list: `public/animations/catalog.json` (162 animations)
 
 ```bash
 cd ~/.openclaw/workspace/clawatar && node -e "
-const W=require('ws'),s=new W('ws://localhost:8765');
+const W=require('ws'),s=new W('ws://127.0.0.1:8765');
 s.on('open',()=>{s.send(JSON.stringify({type:'speak',text:'Hello!',action_id:'161_Waving',expression:'happy'}));setTimeout(()=>s.close(),1000)})
 "
 ```

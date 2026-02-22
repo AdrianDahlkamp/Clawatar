@@ -18,7 +18,10 @@ const queryParams = new URLSearchParams(window.location.search)
 const isFollower = queryParams.has('noidle')
 const isEmbedMode = queryParams.has('embed')
 const isBackgroundOnly = queryParams.has('bgonly')
+const isTransparentMode = queryParams.has('transparent')
+const isMeetingMode = queryParams.has('meeting')
 const shouldWarmupAnimations = !isBackgroundOnly && (!isEmbedMode || !isFollower)
+const shouldHardenEmbedPoseRecovery = isEmbedMode || isTransparentMode || isMeetingMode
 
 export function setIdleAnimationsEnabled(enabled: boolean) {
   state.idleAnimationsEnabled = enabled
@@ -227,12 +230,53 @@ function getExpressionForCategory(category: IdleLoopCategory): { name: string; w
 }
 
 let currentIdleCategory: IdleLoopCategory = 'idle'
+let actionRecoveryToken = 0
 
 interface ActionSyncOptions {
   sync?: boolean
   expression?: { name: string; weight: number }
   loop?: boolean
   category?: string
+}
+
+function normalizeAngle(angle: number): number {
+  let value = angle
+  while (value > Math.PI) value -= 2 * Math.PI
+  while (value < -Math.PI) value += 2 * Math.PI
+  return value
+}
+
+function hardenRootRecoveryPose(): void {
+  if (!shouldHardenEmbedPoseRecovery || !state.vrm) return
+
+  const root = state.vrm.scene
+  root.position.set(0, 0, 0)
+  root.rotation.x = 0
+  root.rotation.z = 0
+
+  const base = normalizeAngle(state.baseFacingYaw)
+  const yawDelta = normalizeAngle(root.rotation.y - base)
+  const maxYaw = Math.PI / 3
+  root.rotation.y = normalizeAngle(base + Math.max(-maxYaw, Math.min(maxYaw, yawDelta)))
+}
+
+function recoverToBaseIdle(reason: string): void {
+  resetExpressionsImmediately()
+
+  try {
+    state.vrm?.humanoid?.resetNormalizedPose()
+  } catch (error) {
+    console.warn('[action-recovery] resetNormalizedPose failed:', error)
+  }
+
+  hardenRootRecoveryPose()
+
+  playBaseIdle()
+    .then(() => setState('idle'))
+    .catch((error) => {
+      console.warn(`[action-recovery] playBaseIdle failed (${reason}):`, error)
+      setState('idle')
+    })
 }
 
 function updateHoldWindow(elapsed: number, seedOffset = 99): void {
@@ -336,6 +380,7 @@ export async function requestAction(actionId: string, options: ActionSyncOptions
   const shouldSync = options.sync ?? true
   const loop = options.loop ?? false
   const targetCategory = options.category ?? (loop ? 'idle' : 'action')
+  const token = ++actionRecoveryToken
 
   if (shouldSync) {
     const syncMessage: any = {
@@ -358,10 +403,27 @@ export async function requestAction(actionId: string, options: ActionSyncOptions
   }
 
   setState('action')
-  await loadAndPlayAction(actionId, false, () => {
-    resetExpressionsImmediately()  // Clear expression overrides right when action ends
-    playBaseIdle().then(() => setState('idle'))
+  let settled = false
+  const finish = (origin: 'finished' | 'watchdog' | 'failed-load') => {
+    if (settled || token !== actionRecoveryToken) return
+    settled = true
+    recoverToBaseIdle(`${actionId}:${origin}`)
+  }
+
+  const action = await loadAndPlayAction(actionId, false, () => {
+    finish('finished')
   }, targetCategory)
+
+  if (!action) {
+    finish('failed-load')
+    return
+  }
+
+  const clipDuration = Number.isFinite(action.getClip().duration) ? action.getClip().duration : 1.2
+  const watchdogMs = Math.max(1800, Math.min(12000, Math.round((clipDuration + 0.95) * 1000)))
+  window.setTimeout(() => {
+    finish('watchdog')
+  }, watchdogMs)
 }
 
 /** Fallback text-based speak (no audio) */
@@ -412,8 +474,7 @@ export async function requestSpeakAudio(audioUrl: string, actionId?: string, exp
 
 function finishSpeaking() {
   resetLipSync()
-  resetExpressionsImmediately()
-  playBaseIdle().then(() => setState('idle'))
+  recoverToBaseIdle('finish-speaking')
 }
 
 /**
@@ -440,8 +501,7 @@ export function requestFinishSpeaking(): void {
 
 export function requestReset() {
   resetLipSync()
-  resetExpressionsImmediately()
-  playBaseIdle().then(() => setState('idle'))
+  recoverToBaseIdle('request-reset')
 }
 
 export function getState(): CharacterState {

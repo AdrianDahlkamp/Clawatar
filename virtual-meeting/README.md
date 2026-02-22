@@ -43,6 +43,17 @@ VAD recording (sox) → Whisper STT → WS meeting_speech → OpenClaw Gateway �
 - **ElevenLabs TTS**: WebSocket streaming, starts TTS as response arrives
 - **Latency: ~2.6s post-speech**
 
+## Frontend/App Delivery Paths
+
+Meeting responses from `ws-server.ts` are delivered to clients via two paths:
+
+1. Local web frontend:
+   - Browser (`localhost:3000`) -> local WS `ws://127.0.0.1:8765`.
+2. Apple app (iPhone/iPad/macOS):
+   - App -> Relay `/ws/client` -> gateway bridge `/ws/gateway` -> backend-internal local WS `ws://127.0.0.1:8765`.
+
+So OpenClaw is shared brain, while delivery transport differs by client type. Apple clients stay relay-only.
+
 ## Trigger Detection
 
 The bridge responds when:

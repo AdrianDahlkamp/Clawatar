@@ -12,6 +12,7 @@ try { config = JSON.parse(readFileSync(configPath, 'utf-8')) } catch {}
 
 const vitePort = config.server?.vitePort || 3000
 const wsPort = config.server?.wsPort || 8765
+const enforceLoopbackWsClients = process.env.CLAWATAR_ALLOW_REMOTE_WS_CLIENTS !== '1'
 
 function getLocalNetworkIPs() {
   const interfaces = networkInterfaces()
@@ -30,6 +31,14 @@ function getLocalNetworkIPs() {
 
 function printConnectionInfo() {
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━')
+
+  if (enforceLoopbackWsClients) {
+    console.log(`🌐 VRM Viewer: http://localhost:${vitePort}`)
+    console.log(`🔌 Internal WS (bridge only): ws://127.0.0.1:${wsPort}`)
+    console.log('🛰️  Apple clients: relay-only (/ws/client)')
+    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n')
+    return
+  }
 
   const localIPs = getLocalNetworkIPs()
   if (localIPs.length === 0) {
