@@ -615,6 +615,13 @@ async function streamingPipeline(
 
 // --- OpenClaw Agent Integration ---
 const GATEWAY_PORT = config.openclaw?.gatewayPort || 18789
+// Session routing: 'main' shares THIS Telegram session's context, but a
+// full agent run on 'main' takes minutes (huge context) and serializes
+// against active Telegram turns — unusable for voice chat latency.
+// Default stays an isolated fast session; CLAWATAR_SESSION_KEY=main opts
+// into the shared-context tunnel at the cost of latency.
+const CHAT_SESSION_KEY = process.env.CLAWATAR_SESSION_KEY || 'vrm-chat'
+
 const GATEWAY_TOKEN = (() => {
   try {
     const configPath = join(process.env.HOME || '', '.openclaw', 'openclaw.json')
@@ -1425,6 +1432,10 @@ async function alignResponseLanguageIfNeeded(
   responseText: string,
   preferredLanguage: ConversationLanguage,
 ): Promise<string> {
+  // Disabled: the agent already follows the user's language (voice prompt
+  // rule 8 + its own persona). Rewriting through a second side-session
+  // loses persona context and adds latency for no benefit.
+  return responseText.trim()
   const trimmed = responseText.trim()
   if (!trimmed) return trimmed
   if (!violatesLanguagePreference(trimmed, preferredLanguage)) return trimmed
@@ -1698,7 +1709,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     try {
       const { text: response, firstChunkMs } = await streamingAudioPipeline(
         messages,
-        'vrm-chat',
+        CHAT_SESSION_KEY,
         broadcast,
       )
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
@@ -1724,7 +1735,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
 
     const { text: response, audioUrl, firstAudioMs, ackSent } = await twoPhaseStreamingPipeline(
       messages,
-      'vrm-chat',
+      CHAT_SESSION_KEY,
       broadcastFn,
     )
 
