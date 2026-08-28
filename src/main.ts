@@ -1,3 +1,4 @@
+import './secure-context-polyfill'
 import * as THREE from 'three'
 import { initScene, initContactShadow, updateContactShadow, scene, camera, renderer, controls, clock, composer, outlineEffect, warmTintVRMMaterials, setTransparentBackground, setContactShadowCharacterVisible } from './scene'
 import { initLookAt, updateLookAt, setMeetingLookAt } from './look-at'

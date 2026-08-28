@@ -1,3 +1,4 @@
+import './secure-context-polyfill'
 import * as THREE from 'three'
 import { state } from './app-state'
 import {

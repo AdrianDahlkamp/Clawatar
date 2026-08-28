@@ -1,3 +1,4 @@
+import './secure-context-polyfill'
 import { initScene, initContactShadow, scene, camera, renderer, controls, clock, setBackgroundTheme } from './scene'
 import { initBackgrounds, applyThemeParticles, updateBackgroundEffects } from './backgrounds'
 import { initGradientBackground, setGradientTheme, updateGradientBackground } from './gradient-background'
