@@ -29,7 +29,9 @@ try { config = JSON.parse(readFileSync(CONFIG_PATH, 'utf-8')) } catch {}
 const VITE_PORT = config.server?.vitePort || 3000
 const WS_PORT = config.server?.wsPort || 8765
 const AUDIO_PORT = config.server?.audioPort || 8866
-const ENFORCE_LOOPBACK_WS_CLIENTS = process.env.CLAWATAR_ALLOW_REMOTE_WS_CLIENTS !== '1'
+// Default: LAN-Clients erlaubt (10.12.95.x ist vertrauenswürdiges Intranet).
+// Setze CLAWATAR_LOOPBACK_ONLY_WS=1 um explizit auf localhost zu beschränken.
+const ENFORCE_LOOPBACK_WS_CLIENTS = process.env.CLAWATAR_LOOPBACK_ONLY_WS === '1'
 const SERVER_HOST = ENFORCE_LOOPBACK_WS_CLIENTS ? '127.0.0.1' : '0.0.0.0'
 const AUDIO_CACHE_DIR = resolve(import.meta.dirname ?? '.', '_audio_cache')
 const MAX_CACHE_FILES = 64
@@ -3698,7 +3700,7 @@ wss.on('connection', (ws, req) => {
 
 console.log(`WebSocket server running on ws://${SERVER_HOST}:${WS_PORT}`)
 if (ENFORCE_LOOPBACK_WS_CLIENTS) {
-  console.log(`[ws-guard] Loopback-only client policy enabled. Set CLAWATAR_ALLOW_REMOTE_WS_CLIENTS=1 to allow remote WS clients.`)
+  console.log(`[ws-guard] Listening on ${SERVER_HOST} (loopback-only: ${ENFORCE_LOOPBACK_WS_CLIENTS}). Set CLAWATAR_LOOPBACK_ONLY_WS=1 to restrict to localhost.`)
 }
 logNetworkEndpoints()
 
