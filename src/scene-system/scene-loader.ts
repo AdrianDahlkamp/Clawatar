@@ -712,24 +712,26 @@ export async function loadRoomGLB(glbPath: string, opts?: {
 
   // Add dedicated scene-character lights for soft face/body glow
   // These complement the dimmed existing lights to keep the "holy light" feel
-  const boost = cfg.charLightBoost ?? 1.0
-  const charFace = new THREE.PointLight(0xfff8f4, 1.2 * boost, 7)
+  // Adrian: charLightBoost-Werte (bis 3.5x) + 1.2/1.4 Base = grelle Blowouts.
+  // Basis halbiert, Boost-Skala reduziert: boost 3.5 → eff. ~1.4 statt 4.2.
+  const boost = 0.55 * Math.sqrt(cfg.charLightBoost ?? 1.0)
+  const charFace = new THREE.PointLight(0xfff8f4, 0.6 * boost, 7)
   charFace.name = 'scene-char-face'
   charFace.position.set(0, 1.5, 2.5)
   scene.add(charFace)
   
-  const charKey = new THREE.DirectionalLight(0xfff6f2, 1.4 * boost)
+  const charKey = new THREE.DirectionalLight(0xfff6f2, 0.7 * boost)
   charKey.name = 'scene-char-key'
   charKey.position.set(0.3, 3.0, 3.0)
   scene.add(charKey)
   
-  const charRim = new THREE.PointLight(0xffb0d8, 0.5 * boost, 6)
+  const charRim = new THREE.PointLight(0xffb0d8, 0.3 * boost, 6)
   charRim.name = 'scene-char-rim'
   charRim.position.set(-1.5, 1.8, -1)
   scene.add(charRim)
 
   // Add warm ambient fill for indoor scenes (prevents completely black areas)
-  const ambientFill = new THREE.AmbientLight(0xfff8f0, 0.15)
+  const ambientFill = new THREE.AmbientLight(0xfff8f0, 0.08)
   ambientFill.name = 'scene-ambient-fill'
   scene.add(ambientFill)
   
@@ -764,13 +766,17 @@ export async function loadRoomGLB(glbPath: string, opts?: {
   // ── Renderer settings ──
   renderer.shadowMap.enabled = true
   renderer.shadowMap.type = THREE.PCFSoftShadowMap
-  renderer.toneMappingExposure = opts?.exposure ?? cfg.exposure ?? 0.95
+  // Adrian: Standard-Exposure war grell (0.95 + gestackte Char-Lights).
+  // 0.72 hält Details in weißen Bereichen, Char bleibt trotzdem ausgeleuchtet.
+  renderer.toneMappingExposure = opts?.exposure ?? cfg.exposure ?? 0.72
 
   // Camera orbit limits — CRITICAL: prevent seeing backstage
-  controls.minDistance = 1.5
+  // Adrian-Fix: minDistance 1.5 hat Presets nach hinten gedrückt („zu weit weg“).
+  // Face-Preset braucht < 1.2m — Limit runter, maxDistance reicht als Rückweg.
+  controls.minDistance = 0.8
   controls.maxDistance = 6.0
   controls.minPolarAngle = 0.3  // prevent looking from directly above
-  controls.maxPolarAngle = 1.5  // prevent looking from below
+  controls.maxPolarAngle = 1.6  // allow slightly lower angles (head-height presets)
   controls.minAzimuthAngle = opts?.minAzimuth ?? cfg.minAzimuth ?? -Math.PI / 2.5
   controls.maxAzimuthAngle = opts?.maxAzimuth ?? cfg.maxAzimuth ?? Math.PI / 2.5
   controls.enableDamping = true

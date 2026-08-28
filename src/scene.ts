@@ -276,12 +276,14 @@ function createStaticControls() {
   }
 }
 
+export const BASE_FOV = 35
+
 export async function initScene(canvas: HTMLCanvasElement, options: InitSceneOptions = {}) {
   clock = new THREE.Clock()
   scene = new THREE.Scene()
   scene.background = null
 
-  camera = new THREE.PerspectiveCamera(35, window.innerWidth / window.innerHeight, 0.01, 100)
+  camera = new THREE.PerspectiveCamera(BASE_FOV, window.innerWidth / window.innerHeight, 0.01, 100)
   camera.position.set(0, 1.2, 3.0)
 
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true })
@@ -714,8 +716,9 @@ export function enhanceLightingForWeb() {
   lightingRig.bounce.color.set(0xffdce8)
   lightingRig.bounce.position.set(0, 0.1, 1.5)
 
-  // Moderate exposure — don't blow out against solid bg
-  renderer.toneMappingExposure = 1.06
+  // Moderate exposure — Adrian: 1.06 war grell, weiße Bereiche gebrannt.
+  // 0.82 erhält Details in heller Kleidung/Wänden.
+  renderer.toneMappingExposure = 0.82
   configureKeyLightShadowCasting()
   setContactShadowOpacity(0.34)
 }

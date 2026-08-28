@@ -1457,7 +1457,7 @@ export function enableRoomMode(): void {
   // Background & fog
   scene.background = new THREE.Color(0x1a1520)
   renderer.setClearColor(0x1a1520, 1)
-  renderer.toneMappingExposure = 0.95
+  renderer.toneMappingExposure = 0.82
   scene.fog = new THREE.Fog(0x1a1520, 4, 8)
 
   // Camera — cozy diorama angle with free orbit
@@ -1512,7 +1512,7 @@ export function disableRoomMode(): void {
   scene.fog = null
 
   setThemeBackgroundSuppressed(false)
-  renderer.toneMappingExposure = 1.06
+  renderer.toneMappingExposure = 0.82
 
   // Restore camera constraints
   controls.minDistance = 1.5

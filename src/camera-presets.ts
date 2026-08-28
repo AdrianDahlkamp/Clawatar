@@ -1,5 +1,5 @@
 import * as THREE from 'three'
-import { camera, controls } from './scene'
+import { camera, controls, BASE_FOV } from './scene'
 import { state } from './app-state'
 import { broadcastSyncCommand } from './sync-bridge'
 
@@ -29,22 +29,23 @@ const PRESETS: Record<CameraPreset, {
   followMode: CameraFollowMode
 }> = {
   face: {
-    // Gesicht: nah dran, Kamera auf Kopfhöhe
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 1.1),
-    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.02, 0),
+    // Gesicht: nah dran, Kamera leicht UNTER Kopfhöhe → Kopf sitzt mittig-oben,
+    // Bild wird vollflächig genutzt statt Kopf am unteren Rand
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.12, 1.0),
+    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.06, 0),
     followMode: 'root',
   },
   portrait: {
     // Oberkörper: Kamera auf Kopfhöhe, Kopf+Torso füllt das Bild
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 1.7),
-    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.2, 0),
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.05, 1.5),
+    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.28, 0),
     followMode: 'root',
   },
   full: {
     // Full Body: Kamera auf Kopfhöhe, Blick leicht nach unten
-    // (35° FOV — bei 3.0m passt 0..1.6m Körperhöhe komplett ins Bild)
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 3.0),
-    targetOffset: new THREE.Vector3(0, 0.85, 0),
+    // (35° FOV — bei 2.6m passt 0..1.5m Körperhöhe komplett ins Bild)
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 2.6),
+    targetOffset: new THREE.Vector3(0, 0.82, 0),
     followMode: 'root',
   },
   meeting: {
@@ -72,8 +73,8 @@ const safetyPush = new THREE.Vector3()
 const safetyBonePos = new THREE.Vector3()
 const SAFETY_BONES = ['head', 'neck', 'leftEye', 'rightEye'] as const
 const SAFETY_SHELL: Record<CameraPreset, { head: number; neck: number; eyes: number; target: number }> = {
-  face: { head: 0.95, neck: 0.85, eyes: 0.9, target: 0.85 },
-  portrait: { head: 1.35, neck: 1.2, eyes: 1.25, target: 1.2 },
+  face: { head: 0.85, neck: 0.75, eyes: 0.8, target: 0.75 },
+  portrait: { head: 1.15, neck: 1.05, eyes: 1.1, target: 1.05 },
   full: { head: 1.7, neck: 1.5, eyes: 1.6, target: 1.45 },
   meeting: { head: 0.82, neck: 0.68, eyes: 0.74, target: 0.62 },
 }
@@ -168,6 +169,14 @@ export function updateCameraPresets(nowSeconds: number) {
 
   camera.position.copy(camPos)
   controls.target.copy(targetPos)
+
+  // Preset-FOV: 3D-Räume setzen oft breite FOVs (42–48°) für Diorama-Look —
+  // das frisst Zoom. Tracking-Presets erzwingen wieder das Base-FOV.
+  if (camera.fov !== BASE_FOV) {
+    camera.fov = BASE_FOV
+    camera.updateProjectionMatrix()
+  }
+
   enforceCameraSafetyForPreset(currentPreset)
 }
 
