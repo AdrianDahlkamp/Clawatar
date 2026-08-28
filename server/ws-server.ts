@@ -524,13 +524,14 @@ async function streamingAudioPipeline(
  */
 const VOICE_SYSTEM_PROMPT_BASE = `You are in VOICE MODE — your response will be spoken aloud via TTS.
 Critical rules:
-1. ALWAYS say a brief phrase BEFORE using any tool (e.g. "让我看看～", "我查一下哦"). This gives immediate audio feedback.
+1. ALWAYS say a brief phrase BEFORE using any tool (e.g. "Moment, ich schau kurz nach."). This gives immediate audio feedback.
 2. NO markdown (**bold**, # headers, | tables, \`code\`, - bullets). TTS reads these literally and it sounds terrible.
 3. Keep it SHORT — 2-4 sentences max unless asked for detail. This is a conversation, not an essay.
 4. Speak naturally, like talking to a friend. No emoji, no URLs.
 5. Use your multimodal memory to be proactive — if you notice something changed or remember a preference, mention it naturally.
 6. Never tell users to manually send WebSocket/gateway JSON commands. If they ask for device speech routing, treat it as an execution request.
-7. Never guess network topology. Do not claim local-vs-relay connection facts unless those facts were explicitly provided in authoritative context.`
+7. Never guess network topology. Do not claim local-vs-relay connection facts unless those facts were explicitly provided in authoritative context.
+8. Reply in the language the user writes in (default: German).`
 
 /**
  * Build voice system prompt with dynamic multimodal memory context.
@@ -1143,7 +1144,9 @@ function buildCharacterPromptContext(): string {
   return [
     `[Character Context]`,
     `Character name: ${characterName}`,
-    `Character role: Clawatar virtual avatar companion`,
+    // NOTE: no role/persona directive here — the agent's own persona
+    // (OpenClaw agent config: SOUL/IDENTITY) is authoritative. Clawatar is
+    // a transport layer, not a character sheet.
     `Avatar id: ${avatarId}`,
     `Avatar thumbnail id: ${thumbnailId}`,
     `Transport policy: Apple clients connect via relay only (/ws/client). Local ws://127.0.0.1:8765 is backend-internal bridge hop.`,
@@ -1365,14 +1368,10 @@ function buildConversationPromptDirective(options: {
     ? 'For this turn, reply ONLY in Chinese. Do not output English unless the user explicitly switches language.'
     : 'For this turn, reply ONLY in English. Do not output Chinese unless the user explicitly switches language.'
 
-  let greetingDirective = 'Do not force a new greeting unless the user explicitly asks for one.'
-  if (options.useProactiveGreeting) {
-    if (options.preferredLanguage === 'zh') {
-      greetingDirective = `This is the first message of a new/restarted conversation window. Your opening sentence MUST explicitly include your identity in Chinese (name + role), for example: "我是${characterName}，你的 Clawatar 虚拟角色搭档。"`
-    } else {
-      greetingDirective = `This is the first message of a new/restarted conversation window. Your opening sentence MUST explicitly include your identity in English (name + role), for example: "I'm ${characterName}, your Clawatar avatar companion."`
-    }
-  }
+  // NOTE: identity-injection directives removed. They forced every greeting
+  // to start with "I'm <name>, your Clawatar avatar companion." The agent's
+  // own persona (OpenClaw agent config) governs identity instead.
+  const greetingDirective = 'Do not force a new greeting unless the user explicitly asks for one.'
 
   return [
     buildCharacterPromptContext(),
@@ -1392,8 +1391,10 @@ function enforceConversationResponseStyle(
 ): string {
   const trimmed = responseText.trim()
   if (!trimmed) return trimmed
-  if (!options.useProactiveGreeting) return trimmed
+  // Disabled: Clawatar no longer injects identity sentences into replies.
+  return trimmed
 
+  // --- unreachable below, kept for reference ---
   const characterName = activeCharacterName()
   const lower = trimmed.toLowerCase()
   const hasName = lower.includes(characterName.toLowerCase())
@@ -3360,4 +3361,12 @@ process.stdin.on('data', (input: string) => {
     }
   }
   console.log(`Sent to ${clients.size} clients: ${trimmed}`)
+})
+
+// --- Safety net: never let an async pipeline error kill the server ---
+process.on('uncaughtException', (err) => {
+  console.error('[fatal-guard] uncaughtException:', err?.message || err)
+})
+process.on('unhandledRejection', (reason) => {
+  console.error('[fatal-guard] unhandledRejection:', (reason as any)?.message || reason)
 })
