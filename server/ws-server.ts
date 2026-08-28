@@ -418,24 +418,27 @@ function markInteractionResponded() {
 }
 
 async function runFillerWatchdog(interaction: AvatarInteraction) {
-  let intent: IntentClass
-  try {
-    intent = await Promise.race([
-      interaction.intentPromise,
-      new Promise<'simple'>(r => setTimeout(() => r('simple'), 7000)),
-    ])
-  } catch { return }
-  if (intent === 'simple') return
-  const elapsed = Date.now() - interaction.startedAt
-  const wait = Math.max(0, FILLER_DELAY_MS - elapsed)
+  // Latency-based fillers: ANY interaction still unanswered after FILLER_DELAY_MS
+  // gets a filler — regardless of intent. (Adrian: chat questions also take 30s+
+  // because the gateway call is slow; classifier verdicts like CHAT said nothing
+  // about wait time.) Intent only picks WHICH filler.
+  const elapsed0 = Date.now() - interaction.startedAt
+  const wait = Math.max(0, FILLER_DELAY_MS - elapsed0)
   if (wait > 0) await sleepMs(wait)
   if (Date.now() - interaction.startedAt > FILLER_WINDOW_MS) return
   if (interaction.responded || interaction.fillerPlayed) return
   if (currentInteraction !== interaction) return
-  // 35% chance the filler is just a non-verbal hum (feels more natural than
-  // always a full sentence), otherwise intent-appropriate filler phrase
+  let intent: IntentClass = 'simple'
+  try {
+    intent = await Promise.race([
+      interaction.intentPromise,
+      new Promise<'simple'>(r => setTimeout(() => r('simple'), 1000)),
+    ])
+  } catch {}
+  // 35% chance of a non-verbal hum regardless of intent; casual chat (simple)
+  // always gets a hum — sentences would feel off there.
   let phrase: string
-  if (Math.random() < 0.35) {
+  if (Math.random() < 0.35 || intent === 'simple') {
     phrase = FILLER_SOUND[Math.floor(Math.random() * FILLER_SOUND.length)]!
   } else {
     const pool = intent === 'task' ? FILLER_TASK : FILLER_DEEP
