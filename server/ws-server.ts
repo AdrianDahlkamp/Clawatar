@@ -44,15 +44,17 @@ const OPENCLAW_SYNC_BACKUP_PATH = process.env.HOME
 const ALLOWED_THEME_KEYS = new Set(['sakura', 'sunset', 'ocean', 'night', 'forest', 'lavender', 'minimal'])
 const ALLOWED_CAMERA_PRESETS = new Set(['face', 'portrait', 'full'])
 
-// --- Local TTS config (Shiho voice via Qwen3-TTS daemon) ---
+// --- Local TTS config (Shiho voice via qwentts.cpp tts-server, OpenAI-compatible) ---
 const TTS_URL = process.env.SHIHO_TTS_URL || 'http://127.0.0.1:8766'
 const TTS_LANGUAGE = config.voice?.language || 'German'
+const TTS_VOICE = process.env.SHIHO_TTS_VOICE || 'shiho'
 
 async function ttsHealth(): Promise<boolean> {
   try {
     const resp = await fetch(`${TTS_URL}/health`, { signal: AbortSignal.timeout(3000) })
     const data: any = await resp.json()
-    return !!data.ready
+    // tts-server (qwentts.cpp): {status:"ok"} — old python daemon: {ready:true}
+    return !!(data.status === 'ok' || data.ready)
   } catch { return false }
 }
 const TRANSPORT_STATUS_KEYWORDS = /(relay|gateway|websocket|ws|8765|18789|连接|连上|本地|直连|鉴权|session|配对|pair)/i
@@ -227,29 +229,29 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
   console.log(`Audio HTTP server on ${getAudioBaseURL()}`)
 })
 
-// --- TTS generation (local Qwen3-TTS voice clone — Shiho) ---
+// --- TTS generation (Shiho voice via qwentts.cpp tts-server, OpenAI-compatible) ---
 async function synthesizeToFile(text: string, fileName?: string): Promise<string> {
-  const resp = await fetch(`${TTS_URL}/synthesize`, {
+  const resp = await fetch(`${TTS_URL}/v1/audio/speech`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ text: text.trim(), language: TTS_LANGUAGE }),
+    body: JSON.stringify({ input: text.trim(), voice: TTS_VOICE, response_format: 'wav' }),
     signal: AbortSignal.timeout(120000),
   })
 
   if (!resp.ok) {
     const body = await resp.text()
-    throw new Error(`TTS daemon error (${resp.status}): ${body.slice(0, 300)}`)
+    throw new Error(`TTS server error (${resp.status}): ${body.slice(0, 300)}`)
   }
 
-  const data: any = await resp.json()
-  if (!data.ok || !data.path) throw new Error(`TTS daemon failed: ${JSON.stringify(data).slice(0, 300)}`)
-
-  // Copy generated wav into the audio cache so the browser can fetch it
-  const buffer = readFileSync(data.path)
+  // tts-server returns a full RIFF wav — stream it into the audio cache
+  const buffer = Buffer.from(await resp.arrayBuffer())
+  if (!buffer.length) throw new Error('TTS server returned an empty body')
   const name = fileName ?? `${randomUUID()}.wav`
   writeFileSync(join(AUDIO_CACHE_DIR, name), buffer)
   pruneCache()
-  return `${getAudioBaseURL()}/audio/${name}`
+  const url = `${getAudioBaseURL()}/audio/${name}`
+  console.log(`[tts] synthesized ${buffer.length} bytes (${(buffer.length / 48000).toFixed(2)}s audio) -> ${name}`)
+  return url
 }
 
 async function generateTTS(text: string): Promise<string> {
