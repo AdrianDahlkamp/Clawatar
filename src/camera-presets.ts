@@ -29,22 +29,22 @@ const PRESETS: Record<CameraPreset, {
   followMode: CameraFollowMode
 }> = {
   face: {
-    // Gesicht: nah, Kamera auf Kopfhöhe
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 1.55),
-    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.04, 0),
+    // Gesicht: nah dran, Kamera auf Kopfhöhe
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 1.1),
+    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.02, 0),
     followMode: 'root',
   },
   portrait: {
-    // Oberkörper: Kamera auf Kopfhöhe, etwas weiter weg
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 2.3),
-    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.12, 0),
+    // Oberkörper: Kamera auf Kopfhöhe, Kopf+Torso füllt das Bild
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 1.7),
+    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.2, 0),
     followMode: 'root',
   },
   full: {
-    // Full Body: Kamera bleibt auf Kopfhöhe, Blick leicht nach unten
-    // (sonst passen Füße nicht ins Bild)
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 3.8),
-    targetOffset: new THREE.Vector3(0, 0.95, 0),
+    // Full Body: Kamera auf Kopfhöhe, Blick leicht nach unten
+    // (35° FOV — bei 3.0m passt 0..1.6m Körperhöhe komplett ins Bild)
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT, 3.0),
+    targetOffset: new THREE.Vector3(0, 0.85, 0),
     followMode: 'root',
   },
   meeting: {
@@ -72,8 +72,8 @@ const safetyPush = new THREE.Vector3()
 const safetyBonePos = new THREE.Vector3()
 const SAFETY_BONES = ['head', 'neck', 'leftEye', 'rightEye'] as const
 const SAFETY_SHELL: Record<CameraPreset, { head: number; neck: number; eyes: number; target: number }> = {
-  face: { head: 1.35, neck: 1.2, eyes: 1.3, target: 1.2 },
-  portrait: { head: 1.9, neck: 1.65, eyes: 1.75, target: 1.65 },
+  face: { head: 0.95, neck: 0.85, eyes: 0.9, target: 0.85 },
+  portrait: { head: 1.35, neck: 1.2, eyes: 1.25, target: 1.2 },
   full: { head: 1.7, neck: 1.5, eyes: 1.6, target: 1.45 },
   meeting: { head: 0.82, neck: 0.68, eyes: 0.74, target: 0.62 },
 }
