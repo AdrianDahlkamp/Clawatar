@@ -126,7 +126,9 @@ const audioServer = createServer((req, res) => {
   
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return }
 
-  const match = req.url?.match(/^\/audio\/([a-f0-9-]+\.(mp3|wav))$/)
+  // Accept UUID names AND prefixed pregen names (idle_<base64url>.wav).
+  // Character class excludes '/' and '..' → no path traversal possible.
+  const match = req.url?.match(/^\/audio\/([A-Za-z0-9_=-]+\.(mp3|wav))$/)
   if (!match) { res.writeHead(404); res.end('Not found'); return }
 
   const filePath = join(AUDIO_CACHE_DIR, match[1])
@@ -295,8 +297,11 @@ const FILLER_DEEP = [
   'Lass mich kurz überlegen.',
   'Hmm... das muss ich kurz prüfen.',
 ]
+// Non-verbal sounds — often more natural than full sentences while thinking.
+// Adrian: „teilweise wäre einfach ein lang gezogenes hmmmm passend“
+const FILLER_SOUND = ['Hmmmm...', 'Mmmh...', 'Mh...', 'Hmmmm, lass mich überlegen...']
 const IDLE_SOUND_PHRASES: Record<string, string[]> = {
-  neutral: ['Hmm.', 'Hm?'],
+  neutral: ['Hmm.', 'Hm?', 'Hmmmm...'],
   happy: ['Hihi.', 'La la la~'],
   curious: ['Hm?', 'Wie interessant...'],
   tired: ['Haaa...', 'Ich könnte einen Kaffee vertragen.'],
@@ -427,8 +432,15 @@ async function runFillerWatchdog(interaction: AvatarInteraction) {
   if (Date.now() - interaction.startedAt > FILLER_WINDOW_MS) return
   if (interaction.responded || interaction.fillerPlayed) return
   if (currentInteraction !== interaction) return
-  const pool = intent === 'task' ? FILLER_TASK : FILLER_DEEP
-  const phrase = pool[Math.floor(Math.random() * pool.length)]!
+  // 35% chance the filler is just a non-verbal hum (feels more natural than
+  // always a full sentence), otherwise intent-appropriate filler phrase
+  let phrase: string
+  if (Math.random() < 0.35) {
+    phrase = FILLER_SOUND[Math.floor(Math.random() * FILLER_SOUND.length)]!
+  } else {
+    const pool = intent === 'task' ? FILLER_TASK : FILLER_DEEP
+    phrase = pool[Math.floor(Math.random() * pool.length)]!
+  }
   interaction.fillerPlayed = true
   console.log(`[filler] Playing (${intent}): "${phrase}"`)
   try {
@@ -504,7 +516,7 @@ function startIdleLoop() {
 // Render all fillers + idle sounds once at startup so they play instantly later.
 async function pregenerateAudio() {
   const phrases = [...new Set([
-    ...FILLER_TASK, ...FILLER_DEEP,
+    ...FILLER_TASK, ...FILLER_DEEP, ...FILLER_SOUND,
     ...Object.values(IDLE_SOUND_PHRASES).flat(),
   ])]
   for (const phrase of phrases) {
