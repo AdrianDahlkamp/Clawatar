@@ -136,6 +136,17 @@ const SCENE_CONFIGS: Record<string, {
     charLightBoost: 1.3,
     walkBounds: { minX: -0.3, maxX: 0.3, minZ: -0.3, maxZ: 0.3 },
   },
+  'new-room': {
+    // Sketchfab-Raum (Meter-Maßstab, 1 Unit = 1m, ~11x15m groß, keine Lights, keine Emissives)
+    // Skaliert nicht nötig — GLB nutzt 1.0 Einheiten = Meter
+    cameraPos: [0, 1.35, 4.2],
+    cameraTarget: [0, 0.85, 0],
+    fov: 42,
+    exposure: 0.85,
+    minAzimuth: -Math.PI / 2,
+    maxAzimuth: Math.PI / 2,
+    walkBounds: { minX: -0.5, maxX: 0.5, minZ: -0.5, maxZ: 0.5 },
+  },
 }
 
 const CSS_OVERLAY_IDS = ['animated-bg', 'particles-canvas'] as const
