@@ -224,6 +224,17 @@ export async function initUI() {
     })
   })
 
+  // Collapse-all button — toggles ALL menu sections at once
+  const collapseAllBtn = document.getElementById('collapse-all-btn')
+  if (collapseAllBtn) {
+    collapseAllBtn.addEventListener('click', () => {
+      const sections = Array.from(document.querySelectorAll('#controls .section'))
+      const anyOpen = sections.some(s => !s.classList.contains('collapsed'))
+      sections.forEach(s => s.classList.toggle('collapsed', anyOpen))
+      collapseAllBtn.textContent = anyOpen ? '▼' : '▲'
+    })
+  }
+
   // Drag and drop
   const overlay = document.getElementById('drop-overlay')!
   const body = document.body

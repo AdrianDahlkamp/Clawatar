@@ -255,6 +255,22 @@
       letter-spacing: 0.01em;
     }
 
+    #collapse-all-btn {
+      margin-left: auto;
+      background: none;
+      border: none;
+      color: #8b4d6d;
+      opacity: 0.55;
+      cursor: pointer;
+      font-size: 0.85rem;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    #collapse-all-btn:hover {
+      opacity: 1;
+      background: rgba(139, 77, 109, 0.1);
+    }
+
     .state-badge {
       font-size: 10px;
       font-weight: 600;
@@ -1030,14 +1046,7 @@
     <div class="panel-title">
       Shiho ✨
       <span id="state-indicator" class="state-badge state-idle">Idle</span>
-    </div>
-
-    <div class="section">
-      <div class="section-header">🎭 model</div>
-      <div class="section-body">
-        <input type="text" id="model-url" placeholder="URL or path to .vrm file" value="" />
-        <button id="load-model-btn">Load</button>
-      </div>
+      <button id="collapse-all-btn" title="Alle Menüs ein-/ausklappen">▼</button>
     </div>
 
     <div class="section">
@@ -1082,6 +1091,10 @@
       <div class="section-header">🔧 debug</div>
       <div class="section-body">
         <div class="debug-note" style="font-size:0.75rem;opacity:0.6;margin-bottom:8px">Nur für Entwicklung — Avatar steuert sich sonst selbst.</div>
+        <div class="settings-row" style="margin-bottom:6px">
+          <input type="text" id="model-url" placeholder="URL or path to .vrm file" value="" />
+          <button id="load-model-btn">Load</button>
+        </div>
         <label><input type="checkbox" id="debug-emotion-bar"> Emotion-Bar zeigen</label>
         <input type="text" id="action-search" placeholder="Search actions..." />
         <select id="action-select" size="1"></select>
@@ -1109,12 +1122,6 @@
           <label>Max Hold (s)</label>
           <input type="number" id="idle-max-hold" step="1" min="1" />
         </div>
-      </div>
-    </div>
-
-    <div class="section collapsed">
-      <div class="section-header">⚙️ settings+</div>
-      <div class="section-body">
         <label><input type="checkbox" id="auto-blink" checked> Auto Blink</label>
         <label><input type="checkbox" id="mouse-look" checked> Mouse Look</label>
         <label><input type="checkbox" id="transparent-bg"> Transparent BG</label>

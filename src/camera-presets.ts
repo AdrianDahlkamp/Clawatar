@@ -32,10 +32,9 @@ const PRESETS: Record<CameraPreset, {
   azimuth?: number
 }> = {
   face: {
-    // Gesicht: nah dran, Kamera leicht UNTER Kopfhöhe → Kopf sitzt mittig-oben,
-    // Bild wird vollflächig genutzt statt Kopf am unteren Rand
-    posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.12, 1.0),
-    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.06, 0),
+    // Gesicht: nah dran, Kamera unter Kopfhöhe → Kopf sitzt mittig (Adrian: vorher zu hoch)
+    posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.22, 1.0),
+    targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.14, 0),
     followMode: 'root',
   },
   portrait: {
@@ -106,6 +105,17 @@ export function initCameraPresets() {
       pulseButton(button)
     })
   })
+
+  // Mausrad-Zoom: skaliert den Preset-Abstand (Tracking ueberschreibt OrbitControls-Zoom sonst)
+  const canvas = document.querySelector('canvas')
+  if (canvas) {
+    canvas.addEventListener('wheel', (e) => {
+      // Nur zoomen, wenn auch rotieren erlaubt ist (Normal-Modus, nicht embed/transparent)
+      if (!controls || controls.enableRotate === false) return
+      e.preventDefault()
+      applyWheelZoom(e.deltaY)
+    }, { passive: false })
+  }
 }
 
 /** Get the VRM head bone world position */
@@ -240,6 +250,25 @@ function enforceCameraSafetyForPreset(presetId: CameraPreset) {
   }
 }
 
+/** Mouse-wheel zoom for tracking presets: scales the preset distance.
+ *  OrbitControls zoom would be overwritten every frame by the preset tracking —
+ *  so we adjust the preset's user distance multiplier instead. */
+export function applyWheelZoom(deltaY: number) {
+  const cur = customOffsets[currentPreset]?.distance ?? 1.0
+  const next = Math.min(2.5, Math.max(0.4, cur * (1 + deltaY * 0.0008)))
+  customOffsets[currentPreset] = {
+    distance: next,
+    height: customOffsets[currentPreset]?.height ?? 0,
+  }
+  trackingInitialized = false
+}
+
+/** Reset wheel zoom on preset switch */
+export function resetZoomState() {
+  const cur = customOffsets[currentPreset]
+  if (cur) delete (cur as { distance?: number }).distance
+}
+
 /** Set camera to a named preset (callable from WS commands) */
 export function setCameraPreset(presetId: string, duration = 0.8) {
   const preset = PRESETS[presetId as CameraPreset]
@@ -247,6 +276,7 @@ export function setCameraPreset(presetId: string, duration = 0.8) {
 
   currentPreset = presetId as CameraPreset
   trackingInitialized = false  // Reset tracking smoothing
+  resetZoomState()             // Preset-Wechsel resettet Mausrad-Zoom
 
   if (preset.followMode !== 'fixed') {
     // For follow presets: transition to current anchor + adjusted offset
