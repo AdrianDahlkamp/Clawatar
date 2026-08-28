@@ -49,6 +49,7 @@ const SCENE_CONFIGS: Record<string, {
   charLightBoost?: number  // multiplier on scene-char lights (default 1.0)
   modelOffset?: [number, number, number]  // shift the entire GLB (x, y, z)
   modelRotation?: number  // extra Y rotation in radians (on top of default Math.PI)
+  roomRotation?: number  // rotate whole room group around avatar after load (radians)
   emissiveScale?: number  // per-scene emissive dimming (default SCENE_EMISSIVE_SCALE)
   glbLightScale?: number  // scale for embedded Blender lights instead of disabling (default 0 = disabled)
   bgColor?: number  // scene background color (default 0x1a1520)
@@ -142,6 +143,9 @@ const SCENE_CONFIGS: Record<string, {
     // charPos: freie Stelle laut GLB-Möbel-Analyse (1.3m Clearance) bei three (1.82, 0.12)
     // → Raum wird verschoben, damit der Avatar genau dort steht (Raummitte, nichts clippt)
     modelOffset: [-1.82, 0, -0.12],
+    // Adrian (28.08.2026): Raumsicht-Winkel = Raum-Rotation, NICHT Kamera.
+    // Kamera bleibt frontal auf den Avatar; der Raum zeigt seine Ecke im 135°-Winkel.
+    roomRotation: Math.PI * 0.75,
     cameraPos: [0, 1.35, 4.2],
     cameraTarget: [0, 0.85, 0],
     fov: 42,
@@ -815,6 +819,8 @@ export async function loadRoomGLB(glbPath: string, opts?: {
   controls.update()
 
   currentGroup = group
+  // Per-scene default room rotation (e.g. new-room shows a 135° room corner view)
+  if (cfg.roomRotation) group.rotation.y = cfg.roomRotation
   // Per-scene walk bounds — keep character in clear center stage
   currentWalkBounds = cfg.walkBounds ?? { minX: -0.4, maxX: 0.4, minZ: -0.3, maxZ: 0.3 }
 

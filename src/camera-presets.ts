@@ -40,12 +40,11 @@ const PRESETS: Record<CameraPreset, {
   },
   portrait: {
     // Oberkörper: Kamera auf Kopfhöhe, Kopf+Torso füllt das Bild
-    // Azimut 135° (Adrian, 28.08.2026): Kamera steht seitlich versetzt —
-    // natürlichere 3/4-Sicht statt frontal-hampeligem Look
+    // Frontal (Azimut 0) — der Raumsicht-Winkel kommt über die Raum-Rotation,
+    // nicht über die Kamera (Adrian-Korrektur, 28.08.2026)
     posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.05, 1.5),
     targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.28, 0),
     followMode: 'root',
-    azimuth: Math.PI * 0.75,
   },
   full: {
     // Full Body: Kamera auf Kopfhöhe, Blick leicht nach unten
