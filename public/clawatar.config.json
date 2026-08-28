@@ -1,5 +1,18 @@
 {
   "model": {
-    "url": "https://huggingface.co/datasets/shuaishuaicdp/VRM/resolve/main/release-human-plus-comet-v1/models/base_female.vrm"
+    "url": "./models/shiho.vrm",
+    "autoLoad": true
+  },
+  "voice": {
+    "language": "German"
+  },
+  "server": {
+    "vitePort": 3000,
+    "wsPort": 8765,
+    "audioPort": 8866
+  },
+  "openclaw": {
+    "gatewayPort": 18789,
+    "sessionId": "vrm-chat"
   }
 }

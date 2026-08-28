@@ -1,11 +1,10 @@
 {
   "model": {
-    "url": "./models/avatar.vrm",
+    "url": "./models/shiho.vrm",
     "autoLoad": true
   },
   "voice": {
-    "elevenlabsVoiceId": "L5vK1xowu0LZIPxjLSl5",
-    "elevenlabsModel": "eleven_turbo_v2_5"
+    "language": "German"
   },
   "server": {
     "vitePort": 3000,
