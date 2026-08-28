@@ -139,6 +139,9 @@ const SCENE_CONFIGS: Record<string, {
   'new-room': {
     // Sketchfab-Raum (Meter-Maßstab, 1 Unit = 1m, ~11x15m groß, keine Lights, keine Emissives)
     // Skaliert nicht nötig — GLB nutzt 1.0 Einheiten = Meter
+    // charPos: freie Stelle laut GLB-Möbel-Analyse (1.3m Clearance) bei three (1.82, 0.12)
+    // → Raum wird verschoben, damit der Avatar genau dort steht (Raummitte, nichts clippt)
+    modelOffset: [-1.82, 0, -0.12],
     cameraPos: [0, 1.35, 4.2],
     cameraTarget: [0, 0.85, 0],
     fov: 42,
