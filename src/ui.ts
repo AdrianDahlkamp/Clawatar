@@ -224,15 +224,20 @@ export async function initUI() {
     })
   })
 
-  // Collapse-all button — toggles ALL menu sections at once
+  // Collapse-all button — hides ALL menu sections at once (panel shrinks to
+  // just the "Shiho" title + Idle badge + button)
   const collapseAllBtn = document.getElementById('collapse-all-btn')
+  const sectionsContainer = document.getElementById('controls-sections')
   if (collapseAllBtn) {
+    const applyControlsHidden = (hidden: boolean) => {
+      if (sectionsContainer) sectionsContainer.style.display = hidden ? 'none' : ''
+      collapseAllBtn.textContent = hidden ? '▼' : '▲'
+    }
     collapseAllBtn.addEventListener('click', () => {
-      const sections = Array.from(document.querySelectorAll('#controls .section'))
-      const anyOpen = sections.some(s => !s.classList.contains('collapsed'))
-      sections.forEach(s => s.classList.toggle('collapsed', anyOpen))
-      collapseAllBtn.textContent = anyOpen ? '▼' : '▲'
+      applyControlsHidden(sectionsContainer?.style.display !== 'none')
     })
+    // Start collapsed — clean look, open on demand
+    applyControlsHidden(true)
   }
 
   // Drag and drop

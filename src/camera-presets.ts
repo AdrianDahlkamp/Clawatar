@@ -255,7 +255,7 @@ function enforceCameraSafetyForPreset(presetId: CameraPreset) {
  *  so we adjust the preset's user distance multiplier instead. */
 export function applyWheelZoom(deltaY: number) {
   const cur = customOffsets[currentPreset]?.distance ?? 1.0
-  const next = Math.min(2.5, Math.max(0.4, cur * (1 + deltaY * 0.0008)))
+  const next = Math.min(2.5, Math.max(0.4, cur * (1 + deltaY * 0.0004)))
   customOffsets[currentPreset] = {
     distance: next,
     height: customOffsets[currentPreset]?.height ?? 0,
