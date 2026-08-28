@@ -224,7 +224,7 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
 })
 
 // --- TTS generation (local Qwen3-TTS voice clone — Shiho) ---
-async function generateTTS(text: string): Promise<string> {
+async function synthesizeToFile(text: string, fileName?: string): Promise<string> {
   const resp = await fetch(`${TTS_URL}/synthesize`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -242,16 +242,23 @@ async function generateTTS(text: string): Promise<string> {
 
   // Copy generated wav into the audio cache so the browser can fetch it
   const buffer = readFileSync(data.path)
-  const fileName = `${randomUUID()}.wav`
-  writeFileSync(join(AUDIO_CACHE_DIR, fileName), buffer)
+  const name = fileName ?? `${randomUUID()}.wav`
+  writeFileSync(join(AUDIO_CACHE_DIR, name), buffer)
   pruneCache()
-  return `${getAudioBaseURL()}/audio/${fileName}`
+  return `${getAudioBaseURL()}/audio/${name}`
+}
+
+async function generateTTS(text: string): Promise<string> {
+  // Pre-generated phrases (fillers, idle sounds) play instantly — no TTS round-trip
+  const pre = PREGEN_AUDIO.get(text.trim())
+  if (pre) return pre
+  return synthesizeToFile(text.trim())
 }
 
 function pruneCache() {
   try {
     const files = readdirSync(AUDIO_CACHE_DIR)
-      .filter(f => f.endsWith('.mp3'))
+      .filter(f => (f.endsWith('.mp3') || f.endsWith('.wav')) && !f.startsWith('idle_'))
       .map(f => ({ name: f, mtime: statSync(join(AUDIO_CACHE_DIR, f)).mtimeMs }))
       .sort((a, b) => b.mtime - a.mtime)
     for (const f of files.slice(MAX_CACHE_FILES)) {
@@ -259,6 +266,331 @@ function pruneCache() {
     }
   } catch {}
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// Shiho Personality Layer — Filler, Idle-Emotionen, Kontext-Sync
+// ═══════════════════════════════════════════════════════════════════
+
+const sleepMs = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+function broadcastToAllClients(msg: any) {
+  const str = JSON.stringify(msg)
+  for (const client of clients) {
+    if (client.readyState === WebSocket.OPEN) client.send(str)
+  }
+}
+
+// ── Pre-generated audio (fillers + idle sounds) ────────────────────
+const PREGEN_AUDIO = new Map<string, string>() // phrase -> audio_url
+
+const FILLER_TASK = [
+  'Lass mich mal nachschauen.',
+  'Ich schau mal, was ich machen kann.',
+  'Moment, ich kümmere mich drum.',
+]
+const FILLER_DEEP = [
+  'Interessante Frage, gib mir ne Sekunde.',
+  'Lass mich kurz überlegen.',
+  'Hmm... das muss ich kurz prüfen.',
+]
+const IDLE_SOUND_PHRASES: Record<string, string[]> = {
+  neutral: ['Hmm.', 'Hm?'],
+  happy: ['Hihi.', 'La la la~'],
+  curious: ['Hm?', 'Wie interessant...'],
+  tired: ['Haaa...', 'Ich könnte einen Kaffee vertragen.'],
+  sad: ['Haaa...'],
+  excited: ['Ohh!', 'Juhu!'],
+  angry: ['Tsss.'],
+}
+const IDLE_ACTIONS: Record<string, string[]> = {
+  neutral: ['131_Neck Stretching', '127_Leaning', '119_Idle'],
+  happy: ['116_Happy Hand Gesture', '161_Waving'],
+  curious: ['88_Thinking'],
+  tired: ['131_Neck Stretching', '149_Sitting Idle'],
+  sad: ['142_Sad Idle'],
+  excited: ['49_Joyful Jump', '116_Happy Hand Gesture'],
+  angry: ['95_Annoyed Head Shake'],
+}
+const MOOD_EXPRESSION: Record<string, string> = {
+  neutral: 'relaxed', happy: 'happy', curious: 'surprised', tired: 'relaxed',
+  sad: 'sad', excited: 'happy', angry: 'angry',
+}
+
+// ── Mood tracking (fed by user-text mood detection, decays to neutral)
+let currentMood = 'neutral'
+let moodSetAt = Date.now()
+
+function setMood(mood: string) {
+  currentMood = mood
+  moodSetAt = Date.now()
+}
+
+// ── Intent classification (mini local model, with heuristic fallback) ─
+type IntentClass = 'simple' | 'task' | 'deep'
+const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434'
+const CLASSIFIER_MODEL = process.env.CLAWATAR_CLASSIFIER_MODEL || 'qwen3.8-200k:latest'
+const FILLER_DELAY_MS = 2500   // min wait before filler plays
+const FILLER_WINDOW_MS = 45000 // no filler after this
+
+function heuristicIntent(text: string): IntentClass {
+  const t = text.toLowerCase()
+  if (/\b(such|suche|finde|check|prüf|recherchier|erstelle|bau|mach|schreib|mail|kalender|termin|notier|issue|deploy|git|sql|notion|download|lade|analysier|übersetz|fix|update|installier|kopier|sende|kauf|bestell)/i.test(t)) return 'task'
+  if (/^(warum|wieso|weshalb|wie kann|wie funktioniert|erklär|was ist der unterschied)/i.test(t.trim())) return 'deep'
+  if (text.trim().endsWith('?') && text.length > 60) return 'deep'
+  return 'simple'
+}
+
+async function classifyIntent(text: string): Promise<IntentClass> {
+  const trimmed = text.trim()
+  // Short greetings/smalltalk don't need a model call
+  if (trimmedWords(text) <= 3) return heuristicIntent(trimmed)
+  try {
+    const prompt = [
+      'Klassifiziere die folgende Nachricht. Antworte mit GENAU EINEM Wort:',
+      '- CHAT: einfache Konversation oder Smalltalk, sofort beantwortbar',
+      '- TASK: konkrete Arbeitsaufgabe (suchen, prüfen, erstellen, Tools benutzen)',
+      '- DEEP: Frage, die Nachdenken oder Recherche braucht',
+      `Nachricht: "${text.replace(/["\n]/g, ' ').slice(0, 300)}"`,
+      'Antwort:',
+    ].join('\n')
+    const resp = await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        model: CLASSIFIER_MODEL,
+        prompt,
+        stream: false,
+        options: { num_predict: 6, temperature: 0 },
+      }),
+      signal: AbortSignal.timeout(4000),
+    })
+    if (!resp.ok) return heuristicIntent(text)
+    const data: any = await resp.json()
+    const out = String(data?.response || '').toUpperCase()
+    if (out.includes('TASK')) return 'task'
+    if (out.includes('DEEP')) return 'deep'
+    if (out.includes('CHAT')) return 'simple'
+    return heuristicIntent(text)
+  } catch {
+    // Model cold/unavailable → heuristic fallback (never block the filler)
+    return heuristicIntent(text)
+  }
+}
+
+function trimmedWords(t: string): number {
+  return t.trim().split(/\s+/).filter(Boolean).length
+}
+
+interface AvatarInteraction {
+  text: string
+  startedAt: number
+  responded: boolean
+  fillerPlayed: boolean
+  intentPromise: Promise<IntentClass>
+}
+let currentInteraction: AvatarInteraction | null = null
+let lastInteractionAt = Date.now()
+
+function beginInteraction(text: string): AvatarInteraction {
+  lastInteractionAt = Date.now()
+  const interaction: AvatarInteraction = {
+    text,
+    startedAt: Date.now(),
+    responded: false,
+    fillerPlayed: false,
+    intentPromise: classifyIntent(text),
+  }
+  currentInteraction = interaction
+  void runFillerWatchdog(interaction).catch(() => {})
+  return interaction
+}
+
+function markInteractionResponded() {
+  if (currentInteraction) currentInteraction.responded = true
+}
+
+async function runFillerWatchdog(interaction: AvatarInteraction) {
+  let intent: IntentClass
+  try {
+    intent = await Promise.race([
+      interaction.intentPromise,
+      new Promise<'simple'>(r => setTimeout(() => r('simple'), 7000)),
+    ])
+  } catch { return }
+  if (intent === 'simple') return
+  const elapsed = Date.now() - interaction.startedAt
+  const wait = Math.max(0, FILLER_DELAY_MS - elapsed)
+  if (wait > 0) await sleepMs(wait)
+  if (Date.now() - interaction.startedAt > FILLER_WINDOW_MS) return
+  if (interaction.responded || interaction.fillerPlayed) return
+  if (currentInteraction !== interaction) return
+  const pool = intent === 'task' ? FILLER_TASK : FILLER_DEEP
+  const phrase = pool[Math.floor(Math.random() * pool.length)]!
+  interaction.fillerPlayed = true
+  console.log(`[filler] Playing (${intent}): "${phrase}"`)
+  try {
+    const audioUrl = await generateTTS(phrase)
+    if (interaction.responded) return // response arrived while we generated
+    broadcastToAllClients({
+      type: 'speak_audio', audio_url: audioUrl, text: phrase,
+      action_id: '88_Thinking', expression: 'neutral', expression_weight: 0.5,
+    })
+  } catch {}
+}
+
+// ── Idle behavior loop ────────────────────────────────────────────
+// Occasionally sighs/hums/moves based on current mood while nothing happens.
+const IDLE_CHECK_INTERVAL_MS = 60_000
+const IDLE_MIN_QUIET_MS = 25_000   // only after this much silence
+const IDLE_CHANCE = 0.35           // per check, while idle
+const MOOD_DECAY_MS = 10 * 60_000  // mood drifts back to neutral after 10min
+
+let idleTimer: ReturnType<typeof setInterval> | null = null
+
+function startIdleLoop() {
+  if (idleTimer) return
+  idleTimer = setInterval(() => {
+    try {
+      if (Date.now() - moodSetAt > MOOD_DECAY_MS && currentMood !== 'neutral') {
+        setMood('neutral')
+        console.log('[idle] Mood decayed to neutral')
+      }
+      if (![...clients].some(c => c.readyState === WebSocket.OPEN)) return
+      if (Date.now() - lastInteractionAt < IDLE_MIN_QUIET_MS) return
+      if (Math.random() > IDLE_CHANCE) return
+
+      const mood = currentMood
+      const sounds = IDLE_SOUND_PHRASES[mood] || IDLE_SOUND_PHRASES.neutral!
+      const actions = IDLE_ACTIONS[mood] || IDLE_ACTIONS.neutral!
+      const r = Math.random()
+
+      if (r < 0.45) {
+        // idle sound (pre-generated → instant)
+        const phrase = sounds[Math.floor(Math.random() * sounds.length)]!
+        const audioUrl = PREGEN_AUDIO.get(phrase)
+        console.log(`[idle] Sound (${mood}): "${phrase}"`)
+        if (audioUrl) {
+          broadcastToAllClients({
+            type: 'speak_audio', audio_url: audioUrl, text: phrase,
+            action_id: pickAction(phrase).action_id,
+            expression: MOOD_EXPRESSION[mood] || 'relaxed', expression_weight: 0.4,
+          })
+        } else {
+          // Not pre-generated yet — generate now for next time, stay silent now
+          void synthesizeToFile(phrase, `idle_${Buffer.from(phrase).toString('base64url').slice(0, 40)}.wav`)
+            .then(url => PREGEN_AUDIO.set(phrase, url))
+            .catch(() => {})
+        }
+      } else {
+        // idle action without sound
+        const action = actions[Math.floor(Math.random() * actions.length)]!
+        console.log(`[idle] Action (${mood}): ${action}`)
+        broadcastToAllClients({
+          type: 'play_action', action_id: action,
+          expression: MOOD_EXPRESSION[mood] || 'relaxed', expression_weight: 0.4,
+        })
+      }
+    } catch (e: any) {
+      console.error(`[idle] loop error: ${e?.message || e}`)
+    }
+  }, IDLE_CHECK_INTERVAL_MS)
+  console.log('[idle] Idle behavior loop started')
+}
+
+// ── Pre-generation warmup ─────────────────────────────────────────
+// Render all fillers + idle sounds once at startup so they play instantly later.
+async function pregenerateAudio() {
+  const phrases = [...new Set([
+    ...FILLER_TASK, ...FILLER_DEEP,
+    ...Object.values(IDLE_SOUND_PHRASES).flat(),
+  ])]
+  for (const phrase of phrases) {
+    if (PREGEN_AUDIO.has(phrase)) continue
+    try {
+      const url = await synthesizeToFile(phrase, `idle_${Buffer.from(phrase).toString('base64url').slice(0, 40)}.wav`)
+      PREGEN_AUDIO.set(phrase, url)
+      console.log(`[pregen] Cached: "${phrase}"`)
+    } catch (e: any) {
+      console.error(`[pregen] Failed "${phrase}": ${e?.message || e}`)
+    }
+  }
+  console.log(`[pregen] ${PREGEN_AUDIO.size} phrases ready`)
+}
+
+// ── Session context sync (Telegram main → vrm-chat briefing) ─────
+const SESSION_SYNC_INTERVAL_MS = 10 * 60_000
+const SESSION_SYNC_ENABLED = process.env.CLAWATAR_CONTEXT_SYNC !== '0'
+
+function readGatewayToken(): string {
+  try {
+    const cfg = JSON.parse(readFileSync(resolve(import.meta.dirname ?? '.', '..', '..', '..', '.openclaw/openclaw.json'), 'utf-8'))
+    return cfg.gateway?.auth?.token || ''
+  } catch { return '' }
+}
+
+async function syncAvatarSessionContext() {
+  try {
+    const token = GATEWAY_TOKEN || readGatewayToken()
+    if (!token) return
+    const resp = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-openclaw-agent-id': 'main',
+        'x-openclaw-session-key': 'main',
+      },
+      body: JSON.stringify({
+        model: 'openclaw',
+        stream: false,
+        messages: [{
+          role: 'user',
+          content: '[System] Automatischer Sync alle 10 Minuten: Fasse in maximal 3-4 kurzen Sätzen zusammen, woran Adrian und du gerade arbeiten und was aktuell wichtig ist. Schreibe es als Notiz AN DICH SELBST in einer zukünftigen Session ("Kontext-Update: ..."). Keine Begrüßung, keine Frage, keine Erklärung — nur die Notiz. Falls es nichts Neues gibt: "Kontext-Update: keine Änderungen."',
+        }],
+      }),
+      signal: AbortSignal.timeout(300000),
+    })
+    if (!resp.ok) {
+      console.error(`[context-sync] Gateway ${resp.status}`)
+      return
+    }
+    const data: any = await resp.json()
+    const summary = data?.choices?.[0]?.message?.content?.trim()
+    if (!summary) return
+    console.log(`[context-sync] Injected briefing into ${CHAT_SESSION_KEY}: "${summary.slice(0, 100)}..."`)
+    // Inject into the avatar session so the 3D-Shiho knows what's going on.
+    // Fire-and-forget: response is irrelevant.
+    void fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        'x-openclaw-agent-id': 'main',
+        'x-openclaw-session-key': CHAT_SESSION_KEY,
+      },
+      body: JSON.stringify({
+        model: 'openclaw',
+        stream: false,
+        messages: [{
+          role: 'system',
+          content: `[Kontext-Update von Shiho's Hauptsession (Telegram)]\n${summary}\n\n(Merke dir das still — antworte nur mit "ok")`,
+        }],
+      }),
+      signal: AbortSignal.timeout(120000),
+    }).catch(() => {})
+  } catch (e: any) {
+    console.error(`[context-sync] ${e?.message || e}`)
+  }
+}
+
+function startSessionSync() {
+  if (!SESSION_SYNC_ENABLED) return
+  setInterval(() => { void syncAvatarSessionContext() }, SESSION_SYNC_INTERVAL_MS)
+  console.log(`[context-sync] Session sync started (every ${SESSION_SYNC_INTERVAL_MS / 60000}min → ${CHAT_SESSION_KEY})`)
+  // First sync after 2 minutes, not immediately at boot
+  setTimeout(() => { void syncAvatarSessionContext() }, 2 * 60_000)
+}
+
 
 // --- Streaming Gateway + TTS Pipeline ---
 
@@ -1470,6 +1802,8 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
   recordConversationState(sourceDeviceKey, preferredLanguage, startTime)
 
   // Record in multimodal memory (non-blocking)
+  // Personality layer: track mood + start filler watchdog for this interaction
+  beginInteraction(text)
   // Simple mood detection from text patterns (fast, no API call)
   const moodPatterns: [RegExp, string][] = [
     [/哈哈|lol|😂|太好了|开心|happy|nice|awesome|棒/i, 'happy'],
@@ -1480,6 +1814,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     [/为什么|怎么|好奇|what|why|how|想知道/i, 'curious'],
   ]
   const detectedMood = moodPatterns.find(([re]) => re.test(text))?.[1]
+  if (detectedMood) setMood(detectedMood)
   multimodalMemory.addAudioMemory(text, detectedMood || undefined)
 
   // Broadcast helper
@@ -1714,6 +2049,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
       )
       const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
       console.log(`[stream-audio] handleUserSpeech done in ${elapsed}s (first chunk: ${firstChunkMs}ms)`)
+      markInteractionResponded()
       return
     } catch (e: any) {
       console.error('[stream-audio] Pipeline error, falling back to batch:', e.message)
@@ -1726,6 +2062,8 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     // Two-phase broadcast: ack first sentence immediately during tool calls,
     // then broadcast the main response when ready
     const broadcastFn = (audioUrl: string, text: string, isAck: boolean) => {
+      // Model's own first sentence counts as response — cancel pending filler
+      markInteractionResponded()
       const { action_id, expression, expression_weight } = isAck
         ? { action_id: '88_Thinking', expression: 'neutral', expression_weight: 0.5 }
         : pickAction(text)
@@ -1765,6 +2103,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
 
     // Broadcast the main response (full text + remaining audio)
     const { action_id, expression, expression_weight } = pickAction(styledResponse)
+    markInteractionResponded()
     broadcast({ type: 'speak_audio', audio_url: finalAudioUrl, text: styledResponse, action_id, expression, expression_weight })
     console.log(`[batch] Broadcast: ${action_id}, ${expression}, device: ${audioDevice || 'all'}`)
   } catch (e: any) {
@@ -1788,6 +2127,7 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
       )
       const { action_id, expression, expression_weight } = pickAction(styledResponse)
       const audioUrl = await generateTTS(styledResponse)
+      markInteractionResponded()
       broadcast({ type: 'speak_audio', audio_url: audioUrl, text: styledResponse, action_id, expression, expression_weight })
     } catch (fallbackErr: any) {
       console.error('[batch] Fallback also failed:', fallbackErr.message)
@@ -3360,6 +3700,11 @@ if (ENFORCE_LOOPBACK_WS_CLIENTS) {
   console.log(`[ws-guard] Loopback-only client policy enabled. Set CLAWATAR_ALLOW_REMOTE_WS_CLIENTS=1 to allow remote WS clients.`)
 }
 logNetworkEndpoints()
+
+// --- Shiho personality layer startup ---
+startIdleLoop()
+startSessionSync()
+void pregenerateAudio()
 
 // stdin relay
 process.stdin.setEncoding('utf-8')
