@@ -42,20 +42,17 @@ const OPENCLAW_SYNC_BACKUP_PATH = process.env.HOME
 const ALLOWED_THEME_KEYS = new Set(['sakura', 'sunset', 'ocean', 'night', 'forest', 'lavender', 'minimal'])
 const ALLOWED_CAMERA_PRESETS = new Set(['face', 'portrait', 'full'])
 
-// ElevenLabs config
-const VOICE_ID = process.env.ELEVEN_LABS_VOICE_ID || config.voice?.elevenlabsVoiceId || 'L5vK1xowu0LZIPxjLSl5'
-const MODEL_ID = process.env.ELEVEN_LABS_MODEL || config.voice?.elevenlabsModel || 'eleven_turbo_v2_5'
+// --- Local TTS config (Shiho voice via Qwen3-TTS daemon) ---
+const TTS_URL = process.env.SHIHO_TTS_URL || 'http://127.0.0.1:8766'
+const TTS_LANGUAGE = config.voice?.language || 'German'
 
-function getApiKey(): string {
-  if (process.env.ELEVENLABS_API_KEY) return process.env.ELEVENLABS_API_KEY
+async function ttsHealth(): Promise<boolean> {
   try {
-    const configPath = join(process.env.HOME || '', '.openclaw', 'openclaw.json')
-    const config = JSON.parse(readFileSync(configPath, 'utf-8'))
-    return config?.skills?.entries?.sag?.apiKey || ''
-  } catch { return '' }
+    const resp = await fetch(`${TTS_URL}/health`, { signal: AbortSignal.timeout(3000) })
+    const data: any = await resp.json()
+    return !!data.ready
+  } catch { return false }
 }
-
-const API_KEY = getApiKey()
 const TRANSPORT_STATUS_KEYWORDS = /(relay|gateway|websocket|ws|8765|18789|连接|连上|本地|直连|鉴权|session|配对|pair)/i
 const BRIDGE_STATUS_URL = process.env.CLAWATAR_BRIDGE_STATUS_URL || 'http://127.0.0.1:8797/status'
 const RELAY_SESSION_STATUS_URL = process.env.CLAWATAR_RELAY_SESSION_STATUS_URL || 'http://127.0.0.1:8797/relay/session-status'
@@ -92,7 +89,7 @@ function isLoopbackAddress(address: string | undefined): boolean {
 }
 
 function getAudioBaseURL(): string {
-  const host = process.env.CLAWATAR_PUBLIC_HOST || getPrimaryNetworkIP() || 'localhost'
+  const host = process.env.CLAWATAR_PUBLIC_HOST || (SERVER_HOST === '127.0.0.1' ? 'localhost' : getPrimaryNetworkIP()) || 'localhost'
   return `http://${host}:${actualAudioPort}`
 }
 
@@ -127,14 +124,15 @@ const audioServer = createServer((req, res) => {
   
   if (req.method === 'OPTIONS') { res.writeHead(200); res.end(); return }
 
-  const match = req.url?.match(/^\/audio\/([a-f0-9-]+\.mp3)$/)
+  const match = req.url?.match(/^\/audio\/([a-f0-9-]+\.(mp3|wav))$/)
   if (!match) { res.writeHead(404); res.end('Not found'); return }
 
   const filePath = join(AUDIO_CACHE_DIR, match[1])
   if (!existsSync(filePath)) { res.writeHead(404); res.end('Not found'); return }
 
   const data = readFileSync(filePath)
-  res.writeHead(200, { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store', 'Content-Length': data.length })
+  const contentType = match[1].endsWith('.wav') ? 'audio/wav' : 'audio/mpeg'
+  res.writeHead(200, { 'Content-Type': contentType, 'Cache-Control': 'no-store', 'Content-Length': data.length })
   res.end(data)
 })
 
@@ -225,32 +223,26 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
   console.log(`Audio HTTP server on ${getAudioBaseURL()}`)
 })
 
-// --- TTS generation ---
+// --- TTS generation (local Qwen3-TTS voice clone — Shiho) ---
 async function generateTTS(text: string): Promise<string> {
-  if (!API_KEY) throw new Error('No ElevenLabs API key configured')
-  
-  const endpoint = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream`
-  const resp = await fetch(endpoint, {
+  const resp = await fetch(`${TTS_URL}/synthesize`, {
     method: 'POST',
-    headers: {
-      'xi-api-key': API_KEY,
-      'accept': 'audio/mpeg',
-      'content-type': 'application/json',
-    },
-    body: JSON.stringify({
-      text: text.trim(),
-      model_id: MODEL_ID,
-      voice_settings: { stability: 0.45, similarity_boost: 0.75 },
-    }),
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ text: text.trim(), language: TTS_LANGUAGE }),
+    signal: AbortSignal.timeout(120000),
   })
 
   if (!resp.ok) {
     const body = await resp.text()
-    throw new Error(`ElevenLabs error (${resp.status}): ${body.slice(0, 300)}`)
+    throw new Error(`TTS daemon error (${resp.status}): ${body.slice(0, 300)}`)
   }
 
-  const buffer = Buffer.from(await resp.arrayBuffer())
-  const fileName = `${randomUUID()}.mp3`
+  const data: any = await resp.json()
+  if (!data.ok || !data.path) throw new Error(`TTS daemon failed: ${JSON.stringify(data).slice(0, 300)}`)
+
+  // Copy generated wav into the audio cache so the browser can fetch it
+  const buffer = readFileSync(data.path)
+  const fileName = `${randomUUID()}.wav`
   writeFileSync(join(AUDIO_CACHE_DIR, fileName), buffer)
   pruneCache()
   return `${getAudioBaseURL()}/audio/${fileName}`
@@ -352,72 +344,18 @@ async function* sentenceSplitter(tokens: AsyncGenerator<string>): AsyncGenerator
 }
 
 /**
- * Streaming TTS: feeds sentence chunks to ElevenLabs WebSocket API,
- * collects MP3 audio, saves to cache, returns URL.
- * Starts generating audio as soon as the first sentence arrives.
+ * Streaming TTS: local generation has no true streaming endpoint, so we
+ * accumulate incoming sentences and synthesize in one pass. The caller
+ * still gets its { audioUrl, firstChunkMs } contract unchanged.
  */
 async function streamingTTS(sentences: AsyncIterable<string>): Promise<{ audioUrl: string; firstChunkMs: number }> {
-  if (!API_KEY) throw new Error('No ElevenLabs API key')
-
-  return new Promise(async (resolve, reject) => {
-    const audioBuffers: Buffer[] = []
-    let firstChunkTime: number | null = null
-    const startTime = Date.now()
-    let resolved = false
-
-    const wsUrl = `wss://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream-input?model_id=${MODEL_ID}&output_format=mp3_44100_128`
-    const elWs = new WebSocket(wsUrl)
-
-    elWs.on('open', async () => {
-      // Initial handshake
-      elWs.send(JSON.stringify({
-        text: ' ',
-        voice_settings: { stability: 0.45, similarity_boost: 0.75 },
-        xi_api_key: API_KEY,
-      }))
-
-      // Feed sentences as they arrive from AI
-      for await (const sentence of sentences) {
-        if (elWs.readyState === WebSocket.OPEN) {
-          elWs.send(JSON.stringify({ text: sentence }))
-        }
-      }
-
-      // Signal end of text
-      if (elWs.readyState === WebSocket.OPEN) {
-        elWs.send(JSON.stringify({ text: '' }))
-      }
-    })
-
-    elWs.on('message', (data) => {
-      try {
-        const msg = JSON.parse(data.toString())
-        if (msg.audio) {
-          const buf = Buffer.from(msg.audio, 'base64')
-          audioBuffers.push(buf)
-          if (!firstChunkTime) {
-            firstChunkTime = Date.now()
-            console.log(`[streaming-tts] First audio chunk: ${firstChunkTime - startTime}ms`)
-          }
-        }
-        if (msg.isFinal) elWs.close()
-      } catch {}
-    })
-
-    elWs.on('close', () => {
-      if (resolved) return
-      resolved = true
-      if (audioBuffers.length === 0) { reject(new Error('No audio from ElevenLabs')); return }
-      const combined = Buffer.concat(audioBuffers)
-      const fileName = `${randomUUID()}.mp3`
-      writeFileSync(join(AUDIO_CACHE_DIR, fileName), combined)
-      pruneCache()
-      const audioUrl = `${getAudioBaseURL()}/audio/${fileName}`
-      resolve({ audioUrl, firstChunkMs: (firstChunkTime || Date.now()) - startTime })
-    })
-
-    elWs.on('error', (err) => { if (!resolved) { resolved = true; reject(err) } })
-  })
+  const startTime = Date.now()
+  const parts: string[] = []
+  for await (const sentence of sentences) {
+    if (sentence.trim()) parts.push(sentence.trim())
+  }
+  const audioUrl = await generateTTS(parts.join(' '))
+  return { audioUrl, firstChunkMs: Date.now() - startTime }
 }
 
 /**
@@ -530,20 +468,6 @@ async function twoPhaseStreamingPipeline(
   return { text: fullText, audioUrl: finalAudioUrl, firstAudioMs: firstSentenceMs, ackSent }
 }
 
-/**
- * ─────────────────────────────────────────────────────────────────────
- * Streaming Audio Pipeline (voice / chat mode ONLY)
- *
- * Optimisations vs the batch pipeline:
- *  1. Tokens fed DIRECTLY to ElevenLabs WS (no sentence splitting)
- *  2. ElevenLabs WS pre-warmed in parallel with Gateway fetch
- *  3. Audio chunks forwarded to browser clients immediately (no file I/O)
- *  4. No gap detection / 1 500 ms wait
- *
- * The browser client plays chunks via MediaSource Extensions for
- * near-zero buffering delay and real-time lip-sync.
- * ─────────────────────────────────────────────────────────────────────
- */
 async function streamingAudioPipeline(
   messages: Array<{ role: string; content: any }>,
   sessionKey: string,
@@ -551,32 +475,9 @@ async function streamingAudioPipeline(
 ): Promise<{ text: string; firstChunkMs: number }> {
   messages = [{ role: 'system', content: getVoiceSystemPrompt() }, ...messages]
   const startTime = Date.now()
-  const sid = randomUUID()
-  let fullText = ''
-  let firstChunkMs = 0
-  let chunkIndex = 0
-  let audioStartSent = false
 
-  /* ── 1. Pre-warm ElevenLabs WS ── */
-  const elReady = new Promise<WebSocket>((resolve, reject) => {
-    const url = `wss://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream-input?model_id=${MODEL_ID}&output_format=mp3_44100_128`
-    const ws = new WebSocket(url)
-    ws.on('open', () => {
-      ws.send(JSON.stringify({
-        text: ' ',
-        voice_settings: { stability: 0.45, similarity_boost: 0.75 },
-        // Lower chunk_length_schedule for faster first-audio in voice chat
-        generation_config: { chunk_length_schedule: [50, 80, 120, 160] },
-        xi_api_key: API_KEY,
-      }))
-      resolve(ws)
-    })
-    ws.on('error', reject)
-    setTimeout(() => reject(new Error('ElevenLabs WS connect timeout')), 8000)
-  })
-
-  /* ── 2. Start Gateway SSE in parallel ── */
-  const gwResp = fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
+  /* ── 1. Ask the local OpenClaw Gateway for the full reply ── */
+  const resp = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -584,143 +485,35 @@ async function streamingAudioPipeline(
       'x-openclaw-agent-id': 'main',
       'x-openclaw-session-key': sessionKey,
     },
-    body: JSON.stringify({ model: 'openclaw', stream: true, messages }),
+    body: JSON.stringify({ model: 'openclaw', stream: false, messages }),
   })
 
-  const [elWs, resp] = await Promise.all([elReady, gwResp])
-
   if (!resp.ok) {
-    elWs.close()
     throw new Error(`Gateway ${resp.status}: ${(await resp.text()).slice(0, 200)}`)
   }
 
-  /* ── 3. Forward ElevenLabs audio → clients ── */
-  const elDone = new Promise<void>((resolve) => {
-    elWs.on('message', (raw: Buffer | string) => {
-      try {
-        const msg = JSON.parse(raw.toString())
-        if (msg.audio) {
-          // Send audio_start before first chunk
-          if (!audioStartSent) {
-            const { action_id, expression, expression_weight } = pickAction(fullText || '…')
-            broadcastToClients({
-              type: 'audio_start', session_id: sid,
-              action_id, expression, expression_weight,
-              text: fullText,
-            })
-            audioStartSent = true
-          }
-          if (chunkIndex === 0) {
-            firstChunkMs = Date.now() - startTime
-            console.log(`[stream-audio] First audio chunk at ${firstChunkMs}ms`)
-          }
-          broadcastToClients({
-            type: 'audio_chunk', audio: msg.audio,
-            index: chunkIndex++, session_id: sid,
-          })
-        }
-        if (msg.isFinal) elWs.close()
-      } catch {}
-    })
-    elWs.on('close', resolve)
-    elWs.on('error', () => resolve())
-    setTimeout(resolve, 60_000) // safety
-  })
-
-  /* ── 4. Read Gateway tokens → batch & feed ElevenLabs ── */
-  //
-  // Token batching + gap-triggered generation:
-  //  • Accumulate tokens in a small buffer
-  //  • Flush to ElevenLabs every BATCH_MS or when punctuation seen
-  //  • If no tokens arrive for GAP_TRIGGER_MS, send try_trigger_generation
-  //    so ElevenLabs renders whatever it has (critical for tool-call gaps)
-  //
-  const BATCH_MS = 80       // max time to buffer tokens before sending
-  const GAP_TRIGGER_MS = 400 // gap without tokens → force audio generation
-
-  let tokenBuf = ''
-  let gapTimer: ReturnType<typeof setTimeout> | null = null
-  let batchTimer: ReturnType<typeof setTimeout> | null = null
-  const PUNCT = /[。！？.!?\n～〜；;：…—，、]/
-
-  const sendToEL = (text: string, trigger: boolean) => {
-    if (!text || elWs.readyState !== WebSocket.OPEN) return
-    const msg: any = { text }
-    if (trigger) msg.try_trigger_generation = true
-    elWs.send(JSON.stringify(msg))
-  }
-
-  const flushBatch = (trigger: boolean) => {
-    if (batchTimer) { clearTimeout(batchTimer); batchTimer = null }
-    if (tokenBuf) {
-      sendToEL(tokenBuf, trigger)
-      tokenBuf = ''
-    }
-  }
-
-  const reader = resp.body!.getReader()
-  const dec = new TextDecoder()
-  let buf = ''
-
-  while (true) {
-    const { done, value } = await reader.read()
-    if (done) break
-    buf += dec.decode(value, { stream: true })
-    const lines = buf.split('\n'); buf = lines.pop() || ''
-    for (const line of lines) {
-      if (!line.startsWith('data: ') || line === 'data: [DONE]') continue
-      try {
-        const token = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content
-        if (token) {
-          fullText += token
-          tokenBuf += token
-
-          // Reset gap timer every time a token arrives
-          if (gapTimer) clearTimeout(gapTimer)
-          gapTimer = setTimeout(() => {
-            flushBatch(true)
-            // Force ElevenLabs to generate audio from whatever it has buffered
-            if (elWs.readyState === WebSocket.OPEN) {
-              elWs.send(JSON.stringify({ text: '', flush: true }))
-              console.log(`[stream-audio] gap flush @${Date.now() - startTime}ms`)
-            }
-          }, GAP_TRIGGER_MS)
-
-          // Flush immediately on sentence-ending punctuation (with trigger + flush)
-          if (PUNCT.test(token)) {
-            flushBatch(true)
-            if (elWs.readyState === WebSocket.OPEN) {
-              elWs.send(JSON.stringify({ text: '', flush: true }))
-            }
-          } else if (!batchTimer) {
-            // Otherwise batch up to BATCH_MS
-            batchTimer = setTimeout(() => flushBatch(false), BATCH_MS)
-          }
-        }
-      } catch {}
-    }
-  }
-
-  // Flush anything left
-  flushBatch(true)
-  if (gapTimer) clearTimeout(gapTimer)
-
-  // Signal end-of-text to ElevenLabs
-  if (elWs.readyState === WebSocket.OPEN) {
-    elWs.send(JSON.stringify({ text: '' }))
-  }
-
-  await elDone
+  const data: any = await resp.json()
+  const fullText: string = data?.choices?.[0]?.message?.content?.trim() || ''
 
   // Abort if model returned a no-op
-  if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/i.test(fullText.trim())) {
+  if (/^(NO_REPLY|HEARTBEAT_OK)\s*$/i.test(fullText)) {
     console.log('[stream-audio] Response is NO_REPLY — suppressing')
-    return { text: fullText, firstChunkMs }
+    return { text: fullText, firstChunkMs: 0 }
   }
 
-  broadcastToClients({ type: 'audio_end', session_id: sid, text: fullText })
+  /* ── 2. Local TTS (Qwen3-TTS voice clone) ── */
+  const audioUrl = await generateTTS(fullText)
+  const firstChunkMs = Date.now() - startTime
+
+  /* ── 3. Broadcast as speak_audio — client already handles this ── */
+  const { action_id, expression, expression_weight } = pickAction(fullText)
+  broadcastToClients({
+    type: 'speak_audio', audio_url: audioUrl, text: fullText,
+    action_id, expression, expression_weight,
+  })
+
   const totalMs = Date.now() - startTime
-  console.log(`[stream-audio] Done in ${totalMs}ms (${chunkIndex} chunks, first: ${firstChunkMs}ms): "${fullText.slice(0, 80)}"`)
+  console.log(`[stream-audio] Done in ${totalMs}ms (first audio: ${firstChunkMs}ms): "${fullText.slice(0, 80)}"`)
   return { text: fullText, firstChunkMs }
 }
 
