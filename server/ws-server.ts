@@ -328,7 +328,7 @@ function setMood(mood: string) {
 // ── Intent classification (mini local model, with heuristic fallback) ─
 type IntentClass = 'simple' | 'task' | 'deep'
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434'
-const CLASSIFIER_MODEL = process.env.CLAWATAR_CLASSIFIER_MODEL || 'qwen3.8-200k:latest'
+const CLASSIFIER_MODEL = process.env.CLAWATAR_CLASSIFIER_MODEL || 'gemma4:e4b:latest'
 const FILLER_DELAY_MS = 2500   // min wait before filler plays
 const FILLER_WINDOW_MS = 45000 // no filler after this
 
@@ -360,7 +360,8 @@ async function classifyIntent(text: string): Promise<IntentClass> {
         model: CLASSIFIER_MODEL,
         prompt,
         stream: false,
-        options: { num_predict: 6, temperature: 0 },
+        options: { num_predict: 6, temperature: 0, num_ctx: 2048 },
+        think: false,  // gemma4 denkt sonst endlos → leere Antwort bei num_predict=6
       }),
       signal: AbortSignal.timeout(4000),
     })
