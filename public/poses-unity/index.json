@@ -1,0 +1,326 @@
+[
+ {
+  "name": "20251210",
+  "path": "poses-unity/20251210.anim"
+ },
+ {
+  "name": "20251225",
+  "path": "poses-unity/20251225.anim"
+ },
+ {
+  "name": "20251228",
+  "path": "poses-unity/20251228.anim"
+ },
+ {
+  "name": "20260101",
+  "path": "poses-unity/20260101.anim"
+ },
+ {
+  "name": "20260125",
+  "path": "poses-unity/20260125.anim"
+ },
+ {
+  "name": "20260128-2",
+  "path": "poses-unity/20260128-2.anim"
+ },
+ {
+  "name": "20260128-3",
+  "path": "poses-unity/20260128-3.anim"
+ },
+ {
+  "name": "20260128FIX",
+  "path": "poses-unity/20260128FIX.anim"
+ },
+ {
+  "name": "20260128MinaseL",
+  "path": "poses-unity/20260128MinaseL.anim"
+ },
+ {
+  "name": "20260128MinaseR",
+  "path": "poses-unity/20260128MinaseR.anim"
+ },
+ {
+  "name": "260223-2",
+  "path": "poses-unity/260223-2.anim"
+ },
+ {
+  "name": "260223",
+  "path": "poses-unity/260223.anim"
+ },
+ {
+  "name": "HayuunPose_Pose1",
+  "path": "poses-unity/HayuunPose_Pose1.anim"
+ },
+ {
+  "name": "HayuunPose_Pose2",
+  "path": "poses-unity/HayuunPose_Pose2.anim"
+ },
+ {
+  "name": "HayuunPose_Pose3",
+  "path": "poses-unity/HayuunPose_Pose3.anim"
+ },
+ {
+  "name": "HayuunPose_Pose4",
+  "path": "poses-unity/HayuunPose_Pose4.anim"
+ },
+ {
+  "name": "HayuunPose_Pose5",
+  "path": "poses-unity/HayuunPose_Pose5.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St1",
+  "path": "poses-unity/Mew_Pose_Ver.0_St1.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St10",
+  "path": "poses-unity/Mew_Pose_Ver.0_St10.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St11",
+  "path": "poses-unity/Mew_Pose_Ver.0_St11.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St12",
+  "path": "poses-unity/Mew_Pose_Ver.0_St12.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St13",
+  "path": "poses-unity/Mew_Pose_Ver.0_St13.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St14",
+  "path": "poses-unity/Mew_Pose_Ver.0_St14.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St15",
+  "path": "poses-unity/Mew_Pose_Ver.0_St15.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St16",
+  "path": "poses-unity/Mew_Pose_Ver.0_St16.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St17-1",
+  "path": "poses-unity/Mew_Pose_Ver.0_St17-1.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St17",
+  "path": "poses-unity/Mew_Pose_Ver.0_St17.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St18",
+  "path": "poses-unity/Mew_Pose_Ver.0_St18.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St19",
+  "path": "poses-unity/Mew_Pose_Ver.0_St19.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St2",
+  "path": "poses-unity/Mew_Pose_Ver.0_St2.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St20",
+  "path": "poses-unity/Mew_Pose_Ver.0_St20.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St21",
+  "path": "poses-unity/Mew_Pose_Ver.0_St21.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St22",
+  "path": "poses-unity/Mew_Pose_Ver.0_St22.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St23",
+  "path": "poses-unity/Mew_Pose_Ver.0_St23.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St3",
+  "path": "poses-unity/Mew_Pose_Ver.0_St3.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St4",
+  "path": "poses-unity/Mew_Pose_Ver.0_St4.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St5",
+  "path": "poses-unity/Mew_Pose_Ver.0_St5.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St6",
+  "path": "poses-unity/Mew_Pose_Ver.0_St6.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St7",
+  "path": "poses-unity/Mew_Pose_Ver.0_St7.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St8",
+  "path": "poses-unity/Mew_Pose_Ver.0_St8.anim"
+ },
+ {
+  "name": "Mew_Pose_Ver.0_St9",
+  "path": "poses-unity/Mew_Pose_Ver.0_St9.anim"
+ },
+ {
+  "name": "PoseM_M1 1",
+  "path": "poses-unity/PoseM_M1 1.anim"
+ },
+ {
+  "name": "PoseM_M1 M",
+  "path": "poses-unity/PoseM_M1 M.anim"
+ },
+ {
+  "name": "PoseM_M1 MR",
+  "path": "poses-unity/PoseM_M1 MR.anim"
+ },
+ {
+  "name": "PoseM_M1 R 1",
+  "path": "poses-unity/PoseM_M1 R 1.anim"
+ },
+ {
+  "name": "PoseM_M1 R",
+  "path": "poses-unity/PoseM_M1 R.anim"
+ },
+ {
+  "name": "PoseM_M1",
+  "path": "poses-unity/PoseM_M1.anim"
+ },
+ {
+  "name": "PoseM_M2 1",
+  "path": "poses-unity/PoseM_M2 1.anim"
+ },
+ {
+  "name": "PoseM_M2 M",
+  "path": "poses-unity/PoseM_M2 M.anim"
+ },
+ {
+  "name": "PoseM_M2 MR",
+  "path": "poses-unity/PoseM_M2 MR.anim"
+ },
+ {
+  "name": "PoseM_M2 R 1",
+  "path": "poses-unity/PoseM_M2 R 1.anim"
+ },
+ {
+  "name": "PoseM_M2 R",
+  "path": "poses-unity/PoseM_M2 R.anim"
+ },
+ {
+  "name": "PoseM_M2",
+  "path": "poses-unity/PoseM_M2.anim"
+ },
+ {
+  "name": "PoseM_M3 1",
+  "path": "poses-unity/PoseM_M3 1.anim"
+ },
+ {
+  "name": "PoseM_M3 M",
+  "path": "poses-unity/PoseM_M3 M.anim"
+ },
+ {
+  "name": "PoseM_M3 MR",
+  "path": "poses-unity/PoseM_M3 MR.anim"
+ },
+ {
+  "name": "PoseM_M3 R 1",
+  "path": "poses-unity/PoseM_M3 R 1.anim"
+ },
+ {
+  "name": "PoseM_M3 R",
+  "path": "poses-unity/PoseM_M3 R.anim"
+ },
+ {
+  "name": "PoseM_M3",
+  "path": "poses-unity/PoseM_M3.anim"
+ },
+ {
+  "name": "PoseM_M4 1",
+  "path": "poses-unity/PoseM_M4 1.anim"
+ },
+ {
+  "name": "PoseM_M4",
+  "path": "poses-unity/PoseM_M4.anim"
+ },
+ {
+  "name": "PoseM_M5 1",
+  "path": "poses-unity/PoseM_M5 1.anim"
+ },
+ {
+  "name": "PoseM_M5 R 1",
+  "path": "poses-unity/PoseM_M5 R 1.anim"
+ },
+ {
+  "name": "PoseM_M5 R",
+  "path": "poses-unity/PoseM_M5 R.anim"
+ },
+ {
+  "name": "PoseM_M5",
+  "path": "poses-unity/PoseM_M5.anim"
+ },
+ {
+  "name": "PoseM_M6 1",
+  "path": "poses-unity/PoseM_M6 1.anim"
+ },
+ {
+  "name": "PoseM_M6 M",
+  "path": "poses-unity/PoseM_M6 M.anim"
+ },
+ {
+  "name": "PoseM_M6 MR",
+  "path": "poses-unity/PoseM_M6 MR.anim"
+ },
+ {
+  "name": "PoseM_M6 R 1",
+  "path": "poses-unity/PoseM_M6 R 1.anim"
+ },
+ {
+  "name": "PoseM_M6 R",
+  "path": "poses-unity/PoseM_M6 R.anim"
+ },
+ {
+  "name": "PoseM_M6",
+  "path": "poses-unity/PoseM_M6.anim"
+ },
+ {
+  "name": "PoseY_YA1 R",
+  "path": "poses-unity/PoseY_YA1 R.anim"
+ },
+ {
+  "name": "PoseY_YA1",
+  "path": "poses-unity/PoseY_YA1.anim"
+ },
+ {
+  "name": "PoseY_YA2 R",
+  "path": "poses-unity/PoseY_YA2 R.anim"
+ },
+ {
+  "name": "PoseY_YA2",
+  "path": "poses-unity/PoseY_YA2.anim"
+ },
+ {
+  "name": "PoseY_YA3 R",
+  "path": "poses-unity/PoseY_YA3 R.anim"
+ },
+ {
+  "name": "PoseY_YA3",
+  "path": "poses-unity/PoseY_YA3.anim"
+ },
+ {
+  "name": "PoseY_YA4 R",
+  "path": "poses-unity/PoseY_YA4 R.anim"
+ },
+ {
+  "name": "PoseY_YA4",
+  "path": "poses-unity/PoseY_YA4.anim"
+ },
+ {
+  "name": "PoseY_YA5 R",
+  "path": "poses-unity/PoseY_YA5 R.anim"
+ },
+ {
+  "name": "PoseY_YA5",
+  "path": "poses-unity/PoseY_YA5.anim"
+ }
+]

@@ -385,6 +385,14 @@ export async function loadVRM(urlOrBlob: string | Blob): Promise<VRM> {
     state.vrmMeta = normalizeVRMMeta((vrm as any).meta)
     state.baseFacingYaw = baseYaw
 
+    // Cache rest positions for Unity pose converter (hips etc.)
+    ;(async () => {
+      try {
+        const { storeRestPositions } = await import('./unity-anim')
+        storeRestPositions(vrm)
+      } catch { /* non-fatal */ }
+    })()
+
     // Save URL for persistence (skip blob URLs)
     if (typeof urlOrBlob === 'string' && !urlOrBlob.startsWith('blob:')) {
       localStorage.setItem('vrm-model-url', urlOrBlob)
