@@ -338,6 +338,7 @@ function setMood(mood: string) {
 type IntentClass = 'simple' | 'task' | 'deep'
 const OLLAMA_URL = process.env.OLLAMA_URL || 'http://127.0.0.1:11434'
 const CLASSIFIER_MODEL = process.env.CLAWATAR_CLASSIFIER_MODEL || 'gemma4:e4b:latest'
+const FILLERS_ENABLED = false  // Off per Adrian (28.08.2026): Fillers klangen wie Antworten — und mit RTF 0.3 TTS ist die Wartezeit eh weg. Zum Reaktivieren: true.
 const FILLER_DELAY_MS = 2500   // min wait before filler plays
 const FILLER_WINDOW_MS = 45000 // no filler after this
 
@@ -420,6 +421,7 @@ function markInteractionResponded() {
 }
 
 async function runFillerWatchdog(interaction: AvatarInteraction) {
+  if (!FILLERS_ENABLED) return
   // Latency-based fillers: ANY interaction still unanswered after FILLER_DELAY_MS
   // gets a filler — regardless of intent. (Adrian: chat questions also take 30s+
   // because the gateway call is slow; classifier verdicts like CHAT said nothing
@@ -1795,6 +1797,12 @@ function buildConversationPromptDirective(options: {
   ].join('\n')
 }
 
+/** Whitespace-insensitive text comparison — used to decide if a pipeline
+ *  rewriter (style/transport guards) changed the spoken text at all. */
+function sameSpokenText(a: string, b: string): boolean {
+  return a.replace(/\s+/g, ' ').trim() === b.replace(/\s+/g, ' ').trim()
+}
+
 function enforceConversationResponseStyle(
   responseText: string,
   options: {
@@ -2172,7 +2180,10 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
       preferredLanguage,
       transportPromptContext,
     )
-    const finalAudioUrl = styledResponse === response ? audioUrl : await generateTTS(styledResponse)
+    // Only re-TTS if a rewriter actually changed the spoken words — whitespace
+    // differences (sentence-join artifacts) must NOT count as a change, otherwise
+    // chained-tts audio gets duplicated by a second full-text broadcast.
+    const finalAudioUrl = sameSpokenText(styledResponse, response) ? audioUrl : await generateTTS(styledResponse)
 
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
     console.log(`[batch] Response in ${elapsed}s (first audio: ${firstAudioMs}ms, ack: ${ackSent}): "${styledResponse.slice(0, 80)}..."`)
