@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Clawatar</title>
+  <title>Shiho</title>
   <script>
     (function() {
       const params = new URLSearchParams(window.location.search);
@@ -1028,7 +1028,7 @@
 
   <div id="controls">
     <div class="panel-title">
-      Clawatar ✨
+      Shiho ✨
       <span id="state-indicator" class="state-badge state-idle">Idle</span>
     </div>
 
@@ -1041,31 +1041,17 @@
     </div>
 
     <div class="section">
-      <div class="section-header">💃 actions</div>
-      <div class="section-body">
-        <input type="text" id="action-search" placeholder="Search actions..." />
-        <select id="action-select" size="1"></select>
-        <button id="play-action-btn">Play</button>
-      </div>
-    </div>
-
-    <div class="section">
-      <div class="section-header">😊 expressions</div>
-      <div class="section-body" id="expression-sliders"></div>
-    </div>
-
-    <div class="section">
       <div class="section-header">🎬 scene</div>
       <div class="section-body">
         <select id="room-select" class="control-select">
           <option value="">Default Background</option>
-          <option value="scenes/cozy-bedroom-v6.glb">🛏️ Bedroom</option>
-          <option value="scenes/swimming-pool.glb">🏊 Pool</option>
-          <option value="scenes/cafe.glb">☕ Café</option>
-          <option value="scenes/phone-booth.glb">☎️ Phone Booth</option>
-          <option value="scenes/sunset-balcony.glb">🌅 Balcony</option>
-          <option value="scenes/izakaya.glb">🏮 Izakaya</option>
-          <option value="scenes/new-room.glb">🏠 New Room</option>
+          <option value="scenes/new-room.glb" selected>🏠 Raum</option>
+          <option value="scenes/cozy-bedroom-v6.glb">🛏️ bedroom</option>
+          <option value="scenes/swimming-pool.glb">🏊 pool</option>
+          <option value="scenes/cafe.glb">☕ café</option>
+          <option value="scenes/phone-booth.glb">☎️ booth</option>
+          <option value="scenes/sunset-balcony.glb">🌅 balcony</option>
+          <option value="scenes/izakaya.glb">🏮 izakaya</option>
         </select>
         <div id="room-rotation-section" class="room-rotation-section">
           <div class="rot-row">
@@ -1089,6 +1075,18 @@
           <button class="camera-pill" data-camera-preset="portrait">Oberkörper</button>
           <button class="camera-pill" data-camera-preset="full">Full Body</button>
         </div>
+      </div>
+    </div>
+
+    <div class="section collapsed">
+      <div class="section-header">🔧 debug</div>
+      <div class="section-body">
+        <div class="debug-note" style="font-size:0.75rem;opacity:0.6;margin-bottom:8px">Nur für Entwicklung — Avatar steuert sich sonst selbst.</div>
+        <label><input type="checkbox" id="debug-emotion-bar"> Emotion-Bar zeigen</label>
+        <input type="text" id="action-search" placeholder="Search actions..." />
+        <select id="action-select" size="1"></select>
+        <button id="play-action-btn">Play action</button>
+        <div class="section-body" id="expression-sliders" style="margin-top:8px"></div>
       </div>
     </div>
 

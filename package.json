@@ -1,12 +1,12 @@
 {
-  "name": "clawatar",
+  "name": "shiho-avatar",
   "version": "0.1.0",
   "description": "From Agent Intelligence to Interactive Intelligence. Give your AI agent a body.",
   "license": "MIT",
   "author": "Dongping Chen",
   "type": "module",
   "bin": {
-    "clawatar": "./bin/cli.js"
+    "shiho-avatar": "./bin/cli.js"
   },
   "files": [
     "bin/",

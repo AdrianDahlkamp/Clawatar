@@ -27,6 +27,9 @@ const PRESETS: Record<CameraPreset, {
   targetOffset: THREE.Vector3
   // How this preset follows avatar motion
   followMode: CameraFollowMode
+  // Extra rotation around the anchor (radians) — applied to posOffset.
+  // 0 = frontal (Standard), PI*0.75 = 135° seitlich (Adrian-Default).
+  azimuth?: number
 }> = {
   face: {
     // Gesicht: nah dran, Kamera leicht UNTER Kopfhöhe → Kopf sitzt mittig-oben,
@@ -37,9 +40,12 @@ const PRESETS: Record<CameraPreset, {
   },
   portrait: {
     // Oberkörper: Kamera auf Kopfhöhe, Kopf+Torso füllt das Bild
+    // Azimut 135° (Adrian, 28.08.2026): Kamera steht seitlich versetzt —
+    // natürlichere 3/4-Sicht statt frontal-hampeligem Look
     posOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.05, 1.5),
     targetOffset: new THREE.Vector3(0, HEAD_HEIGHT - 0.28, 0),
     followMode: 'root',
+    azimuth: Math.PI * 0.75,
   },
   full: {
     // Full Body: Kamera auf Kopfhöhe, Blick leicht nach unten
@@ -308,11 +314,23 @@ function getAdjustedOffsets(presetId: CameraPreset) {
   const effective = getEffectiveAdjustment(presetId)
   // Meeting mode also reads horizontal offset from calibration UI
   const hx = presetId === 'meeting' ? ((window as any).__meetingHorizontal ?? 0) : 0
+  // Azimuth presets (e.g. portrait @ 135°): rotate the XZ part of posOffset
+  // around the anchor. Distance scaling applies along the rotated radius.
+  let px = preset.posOffset.x + hx
+  let pz = preset.posOffset.z * effective.distance
+  if (preset.azimuth) {
+    const s = Math.sin(preset.azimuth)
+    const c = Math.cos(preset.azimuth)
+    const rx = px * c + pz * s
+    const rz = -px * s + pz * c
+    px = rx
+    pz = rz
+  }
   return {
     posOffset: new THREE.Vector3(
-      preset.posOffset.x + hx,
+      px,
       preset.posOffset.y + effective.height,
-      preset.posOffset.z * effective.distance
+      pz
     ),
     targetOffset: new THREE.Vector3(
       preset.targetOffset.x + hx,

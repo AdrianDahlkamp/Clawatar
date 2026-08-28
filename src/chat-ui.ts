@@ -62,7 +62,7 @@ export function addMessage(role: 'user' | 'avatar' | 'system', text: string) {
 
     const name = document.createElement('span')
     name.className = 'chat-name'
-    name.textContent = role === 'user' ? 'You' : 'Clawatar'
+    name.textContent = role === 'user' ? 'You' : 'Shiho'
 
     const stamp = document.createElement('span')
     stamp.className = 'chat-time'

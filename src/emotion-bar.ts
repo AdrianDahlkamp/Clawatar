@@ -52,6 +52,14 @@ export function initEmotionBar() {
   const bar = document.getElementById('emotion-bar')
   if (!bar) return
 
+  // Debug-Toggle: Die Bar ist default hidden (CSS #emotion-bar { display:none });
+  // Checkbox "Emotion-Bar zeigen" im 🔧 debug-Panel schaltet sie wieder ein.
+  bar.style.display = 'none'
+  const debugToggle = document.getElementById('debug-emotion-bar') as HTMLInputElement | null
+  debugToggle?.addEventListener('change', () => {
+    bar.style.display = debugToggle.checked ? 'flex' : 'none'
+  })
+
   bar.querySelectorAll<HTMLButtonElement>('[data-emotion]').forEach((button) => {
     button.addEventListener('click', () => {
       const emotion = button.dataset.emotion

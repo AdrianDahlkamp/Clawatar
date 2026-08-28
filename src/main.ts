@@ -162,8 +162,8 @@ async function autoLoad() {
       // Warm common conversational actions after first frame is ready.
       warmConversationActions(preloadAction)
 
-      // Auto-load room GLB if ?room= param is set
-      const roomParam = params.get('room')
+      // Auto-load room GLB if ?room= param is set, otherwise default room
+      const roomParam = params.get('room') ?? 'new-room'  // Default: der neue Raum (Adrian, 28.08.2026)
       if (roomParam) {
         const roomPath = roomParam.endsWith('.glb') ? roomParam : `scenes/${roomParam}.glb`
         console.log('[autoLoad] Loading room:', roomPath)
@@ -422,6 +422,8 @@ async function init() {
   if (!isMeeting && !isBgOnly) {
     initTouchReactions(canvas)
     initReactiveIdle(canvas)
+    // Emotion-Bar nur im Debug-Modus sichtbar (Adrian 28.08.2026): init registers
+    // the bar but hides it until the 🔧 debug checkbox enables it.
     initEmotionBar()
   }
   initBackgrounds(initialTheme)

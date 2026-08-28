@@ -1,6 +1,37 @@
-rn **CUDA-Graphs — und die laufen offenbar doch auf ROCm** (PyTorch mappt die auf HIP-Graphs). Der dffdeeq-Fork
-Shiho: Compile läuft an — Decoder, Talker und CodePredictor werden kompiliert. Die Warmläufe dauern (Inductor-Compilation), aber danach sollte man's sehen. Ich warte:
-Shiho: `hipErrorLaunchFailure` — der `reduce-overhead`-Modus hat beim Warmlauf die GPU gecrashed (CUDA-Graph-Capture auf ROCm, genau der dokumentierte Bug — charju_ musste auch eigene Arbeit reinstecken, und selbst deren CUDAGraph-Pfad hat "correctness issues"). Nächster Versuch: `mode="default"` — das ist
-Shiho: Der Crash von v3 hat die GPU-Speicherverwaltung durcheinander gebracht — 0 Byte frei, weil Ollama und der laufende TTS-Daemon ihr VRAM halten. Ich prüfe die Belegung:
-Shiho: Der gecrashte v3-Prozess (PID 57109) ist noch als Zombie da und hält **10,7 GB VRAM** gefangen. Den räum ich weg und starte v4 neu:
-Shiho: Der Kernel hat den VRAM des gecrashten Prozesses nicht freigegeben (stale KFD-Eintrag — bekanntes ROCm-Übel nach Launch-Failures). 7,5 GB frei reichen für fp32 nicht. Ich stoppe kurz den Clawatar-TTS-Daemon (10,4 GB — bekommt ohnehin bald den Fork), teste v4, und starte den Daemon danach neu:
+watar
+23:29**
+Hmmmm, lass mich überlegen...
+💣
+**Clawatar
+23:29**
+Hallöchen!
+💣
+**Clawatar
+23:29**
+Noch wach um die Zeit? Ein echter Nachteuler.
+💣
+**Clawatar
+23:29**
+Hallöchen! Noch wach um die Zeit? Ein echter Nachteuler.
+Shiho: E2E läuft! 🎉 Deine Chat-Pipeline durch den neuen tts-server:
+
+- **Filler** nach 2,5 s beim Summen aufgefangen ("Hmmmm, lass mich überlegen...") — die Pre-Generated-Phrases zahlen sich aus
+- **First audio** bei 4163 ms — aber Moment: das ist der Gateway-Chat-Call, nicht TTS. TTS selbst brauchte nur 
+Adrian: lass uns die filler vielleicht erstmal auskommentieren. außerdem ist hier ein andere problem: **You
+23:29**
+hallöchen shiho!
+💣
+**Clawatar
+23:29**
+Hmmmm, lass mich überlegen... / passt nicht als antwort
+💣
+**Clawatar
+23:29**
+Hallöchen! / gut
+💣
+**Clawatar
+23:29**
+Noch wach um die Zeit? Ein echter Na
+Shiho: Jetzt der Doppel-Audio-Bug. Root Cause ist klar sichtbar im Log: Chained-TTS broadcastet die Chunks (markiert `interaction.responded`), aber am Ende wird im `finalAudioUrl === ''`-Fall trotzdem nochmal der **Batch-Broadcast mit dem vollen Text** gefeuert. Ich schau mir die Rückgabe-Logik genau an:
+Adrian: [OpenClaw heartbeat poll]
+Shiho: HEARTBEAT_OK
