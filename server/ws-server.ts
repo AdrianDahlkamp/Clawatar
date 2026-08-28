@@ -799,17 +799,40 @@ async function twoPhaseStreamingPipeline(
       finalAudioUrl = await generateTTS(fullText)
     }
   } else {
-    // NO GAP: simple chat, one-shot TTS
+    // NO GAP: simple chat — chain sentence TTS instead of one big render.
+    // Qwen-TTS on ROCm has RTF ~2 (every 1s of speech costs ~2s of GPU),
+    // so batch-TTS of the full response added 20-40s on top of model latency.
+    // Instead: wait for all sentences (text is fast), then TTS + broadcast in
+    // two chunks — first sentences ASAP, rest follows. Client plays them
+    // back-to-back (speak_audio handler awaits full playback per message).
     while (!allDone) {
-      await new Promise(r => setTimeout(r, 100))
+      await new Promise(r => setTimeout(r, 50))
     }
     fullText = sentenceQueue.map(s => s.text).join('')
-    // Use streaming TTS for better performance
-    async function* sentenceTexts() {
-      for (const s of sentenceQueue) yield s.text
+
+    const chunkTexts: string[] = []
+    if (sentenceQueue.length >= 3) {
+      // Long response: first 1-2 sentences play now, rest is TTS'd while the
+      // first chunk is already playing (overlaps the RTF wait)
+      const splitAt = sentenceQueue.length === 3 ? 1 : 2
+      chunkTexts.push(sentenceQueue.slice(0, splitAt).map(s => s.text).join(' '))
+      chunkTexts.push(sentenceQueue.slice(splitAt).map(s => s.text).join(' '))
+    } else {
+      chunkTexts.push(fullText)
     }
-    const result = await streamingTTS(sentenceTexts())
-    finalAudioUrl = result.audioUrl
+
+    for (let i = 0; i < chunkTexts.length; i++) {
+      const chunkText = chunkTexts[i]!
+      if (!chunkText.trim()) continue
+      try {
+        const audioUrl = await generateTTS(chunkText)
+        broadcastFn(audioUrl, chunkText, false)
+        console.log(`[chained-tts] chunk ${i + 1}/${chunkTexts.length} broadcast at ${Date.now() - startTime}ms`)
+      } catch (e: any) {
+        console.error(`[chained-tts] chunk ${i + 1} TTS failed: ${e.message}`)
+      }
+    }
+    finalAudioUrl = ''  // audio already delivered in chunks
   }
 
   const totalMs = Date.now() - startTime
@@ -2120,10 +2143,17 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     }
 
     // Broadcast the main response (full text + remaining audio)
-    const { action_id, expression, expression_weight } = pickAction(styledResponse)
-    markInteractionResponded()
-    broadcast({ type: 'speak_audio', audio_url: finalAudioUrl, text: styledResponse, action_id, expression, expression_weight })
-    console.log(`[batch] Broadcast: ${action_id}, ${expression}, device: ${audioDevice || 'all'}`)
+    // In chained-tts mode audio was already delivered in chunks — only
+    // broadcast the text here if it hasn't been spoken yet (audioUrl set).
+    if (finalAudioUrl) {
+      const { action_id, expression, expression_weight } = pickAction(styledResponse)
+      markInteractionResponded()
+      broadcast({ type: 'speak_audio', audio_url: finalAudioUrl, text: styledResponse, action_id, expression, expression_weight })
+      console.log(`[batch] Broadcast: ${action_id}, ${expression}, device: ${audioDevice || 'all'}`)
+    } else {
+      markInteractionResponded()
+      console.log(`[batch] Audio already delivered via chained-tts chunks`)
+    }
   } catch (e: any) {
     console.error('[batch] Pipeline error:', e.message)
     // Fallback: non-streaming
