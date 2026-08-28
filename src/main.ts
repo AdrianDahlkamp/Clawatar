@@ -412,8 +412,10 @@ async function init() {
 
   if (!isEmbed && !isMeeting) {
     initUI()
-    // Unity-Pose-Loader (Debug): Asset-Index laden, falls vorhanden
-    import('./unity-poses-ui').then(m => m.initUnityPoses()).catch(() => {})
+    // Unity-Pose-Loader: deaktiviert (Adrian, 29.08.2026) — IK-Kalibrierung
+    // (Füße/Arme) noch falsch, Posen-UI vorerst nicht laden.
+    // Wieder aktivieren: nächsten Block einkommentieren.
+    // import('./unity-poses-ui').then(m => m.initUnityPoses()).catch(() => {})
   }
 
   // Meeting mode: set flags EARLY (before animate loop) to prevent any random idles
