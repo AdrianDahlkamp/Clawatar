@@ -177,6 +177,19 @@ async function handleSyncCommand(cmd: any) {
       break
     }
 
+    case 'room_rotation': {
+      const radians = typeof payload.radians === 'number' ? payload.radians : null
+      if (radians === null || !Number.isFinite(radians)) break
+      const { setRoomRotation } = await import('./scene-system')
+      setRoomRotation(radians)
+
+      const rotSlider = document.getElementById('room-rotation') as HTMLInputElement | null
+      if (rotSlider) {
+        rotSlider.value = String(((radians * 180 / Math.PI) % 360 + 360) % 360)
+      }
+      break
+    }
+
     case 'action': {
       const actionId = typeof payload.actionId === 'string' ? payload.actionId : undefined
       const loop = typeof payload.loop === 'boolean' ? payload.loop : false

@@ -453,6 +453,57 @@
       outline: none;
     }
 
+    .room-rotation-section {
+      margin-top: 10px;
+      padding-top: 8px;
+      border-top: 1px dashed rgba(236, 64, 122, 0.25);
+    }
+
+    .room-rotation-section .rot-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .room-rotation-section .rot-row input[type="range"] {
+      -webkit-appearance: none;
+      appearance: none;
+      flex: 1;
+      height: 6px;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #e1bee7, #ce93d8);
+      outline: none;
+    }
+
+    .room-rotation-section .rot-row input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      appearance: none;
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: #ab47bc;
+      box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(171, 71, 188, 0.45);
+      cursor: pointer;
+    }
+
+    .room-rotation-section .rot-row input[type="range"]::-moz-range-thumb {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      border: none;
+      background: #ab47bc;
+      box-shadow: 0 0 0 2px #fff, 0 2px 8px rgba(171, 71, 188, 0.45);
+      cursor: pointer;
+    }
+
+    .room-rotation-section .rot-value-row {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 4px;
+      font-size: 11px;
+      color: #7e57a5;
+    }
+
     .expr-row input[type="range"]::-webkit-slider-thumb {
       -webkit-appearance: none;
       appearance: none;
@@ -1016,6 +1067,17 @@
           <option value="scenes/izakaya.glb">🏮 Izakaya</option>
           <option value="scenes/new-room.glb">🏠 New Room</option>
         </select>
+        <div id="room-rotation-section" class="room-rotation-section">
+          <div class="rot-row">
+            <button class="camera-pill" data-rot-nudge="-15" title="Raum 15° nach links drehen">↺ 15°</button>
+            <input type="range" id="room-rotation" min="0" max="355" step="5" value="0" />
+            <button class="camera-pill" data-rot-nudge="15" title="Raum 15° nach rechts drehen">↻ 15°</button>
+          </div>
+          <div class="rot-value-row">
+            <span>Blickwinkel</span>
+            <span id="room-rotation-value">0°</span>
+          </div>
+        </div>
       </div>
     </div>
 

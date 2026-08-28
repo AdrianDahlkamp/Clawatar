@@ -2,7 +2,13 @@ export type AvatarSyncCommand = Record<string, unknown> & {
   type: string
 }
 
-type SyncCategory = 'theme' | 'camera' | 'action' | 'expression' | 'scene' | 'state'
+type SyncCategory = 'theme' | 'camera' | 'action' | 'expression' | 'scene' | 'state' | 'room_rotation'
+
+/** Check if any sync-capable window is currently showing a room GLB */
+export function isRoomRotationApplicable(): boolean {
+  return (document.getElementById('room-select') as HTMLSelectElement | null)?.value !== ''
+    && !!(document.getElementById('room-select'))
+}
 
 type SyncEnvelope = {
   type: 'sync'
@@ -144,6 +150,19 @@ function commandToEnvelope(command: AvatarSyncCommand): SyncEnvelope | null {
         type: 'sync',
         category: 'scene',
         payload: sanitizePayload({ room }),
+        origin: resolveOrigin(),
+        ts: Date.now(),
+      }
+    }
+
+    case 'set_room_rotation': {
+      const radians = typeof command.radians === 'number' ? command.radians : undefined
+      if (radians === undefined || !Number.isFinite(radians)) return null
+
+      return {
+        type: 'sync',
+        category: 'room_rotation',
+        payload: sanitizePayload({ radians }),
         origin: resolveOrigin(),
         ts: Date.now(),
       }

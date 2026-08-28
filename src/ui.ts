@@ -172,6 +172,50 @@ export async function initUI() {
     console.warn('[ui] room-select element not found!')
   }
 
+  // Room rotation — spin the room around the avatar (who stands at origin)
+  const ROT_KEY = 'clawatar-room-rotation'
+  let rotationTimer: number | undefined
+
+  const applyRotation = (deg: number, sync: boolean) => {
+    import('./scene-system').then(({ setRoomRotation }) => {
+      setRoomRotation(deg * Math.PI / 180)
+      if (sync) broadcastSyncCommand({ type: 'set_room_rotation', radians: deg * Math.PI / 180 })
+    })
+  }
+
+  const rotSection = document.getElementById('room-rotation-section')
+  if (rotSection) {
+    const slider = document.getElementById('room-rotation') as HTMLInputElement | null
+    const valueLabel = document.getElementById('room-rotation-value')
+
+    // Restore last rotation for this session (room loads reset it)
+    const savedDeg = Number(localStorage.getItem(ROT_KEY) ?? '0')
+    if (slider) slider.value = String(((savedDeg % 360) + 360) % 360)
+    if (valueLabel) valueLabel.textContent = `${Math.round(((savedDeg % 360) + 360) % 360)}°`
+
+    const onSliderInput = () => {
+      if (!slider) return
+      const deg = Number(slider.value)
+      if (valueLabel) valueLabel.textContent = `${Math.round(deg)}°`
+      localStorage.setItem(ROT_KEY, String(deg))
+      // Throttle sync while dragging — apply locally every frame, sync at rest
+      window.clearTimeout(rotationTimer)
+      applyRotation(deg, false)
+      rotationTimer = window.setTimeout(() => applyRotation(deg, true), 250)
+    }
+    slider?.addEventListener('input', onSliderInput)
+
+    rotSection.querySelectorAll<HTMLElement>('[data-rot-nudge]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        if (!slider) return
+        const step = Number(btn.dataset.rotNudge ?? '15')
+        const next = (Number(slider.value) + step + 360) % 360
+        slider.value = String(next)
+        onSliderInput()
+      })
+    })
+  }
+
   // Collapsible sections
   document.querySelectorAll('.section-header').forEach(header => {
     header.addEventListener('click', () => {

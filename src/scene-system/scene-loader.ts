@@ -609,6 +609,23 @@ export function getSceneWalkBounds() {
   return { ...currentWalkBounds }
 }
 
+/** Current room rotation in radians (rotation of room group around avatar at origin) */
+export function getRoomRotation(): number {
+  return currentGroup?.rotation.y ?? 0
+}
+
+/**
+ * Rotate the loaded room GLB around the avatar (who stands fixed at origin).
+ * Visually equivalent to rotating character + camera together, but avoids
+ * fighting yaw clamps / camera safety shells. Ground point under avatar stays
+ * fixed (it's on the rotation axis).
+ */
+export function setRoomRotation(radians: number): void {
+  if (!currentGroup) return
+  currentGroup.rotation.y = radians
+  console.log('[scene-loader] Room rotation set to', (radians * 180 / Math.PI).toFixed(1) + '°')
+}
+
 /**
  * Load a single complete GLB as the entire room/stage environment.
  * No JSON scene description needed — the GLB IS the scene.
