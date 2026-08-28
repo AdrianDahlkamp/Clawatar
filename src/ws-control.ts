@@ -581,7 +581,10 @@ export function connectWS(port = 8765) {
 
   if (ws) ws.close()
 
-  ws = new WebSocket(`ws://localhost:${port}`)
+  // Connect to the same host the page was served from, so LAN access
+  // (e.g. http://10.12.95.92:3000 from another device) works too.
+  const wsHost = window.location.hostname || 'localhost'
+  ws = new WebSocket(`ws://${wsHost}:${port}`)
   // Expose WS for idle animation sync (action-state-machine.ts)
   ;(window as any).__clawatar_ws = ws
 
