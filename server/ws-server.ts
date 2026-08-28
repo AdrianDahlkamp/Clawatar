@@ -536,77 +536,108 @@ async function pregenerateAudio() {
 }
 
 // ── Session context sync (Telegram main → vrm-chat briefing) ─────
+// Liest das Main-Session-Transkript direkt von Platte (gleicher Host wie der
+// Gateway) und schreibt ein Kurz-Briefing, das der vrm-chat-Client beim
+// nächsten Request mitliefert. KEIN Gateway-/chat-completions-Call mehr:
+// - verbraucht keine Tokens, kein Model-Run in der Telegram-Main-Session
+// - keine Zustellung in Telegram (kein Doppel-Reply im Chat)
+// - kein Serialisieren gegen aktive Telegram-Turns
 const SESSION_SYNC_INTERVAL_MS = 10 * 60_000
 const SESSION_SYNC_ENABLED = process.env.CLAWATAR_CONTEXT_SYNC !== '0'
+const OPENCLAW_HOME = process.env.OPENCLAW_HOME || resolve(process.env.HOME || '/home/adrian', '.openclaw')
+const BRIEFING_PATH = resolve(import.meta.dirname ?? '.', 'last-briefing.txt')
 
-function readGatewayToken(): string {
+function resolveMainSessionFile(): string | null {
+  const dir = join(OPENCLAW_HOME, 'agents', 'main', 'sessions')
+  // Primär: neueste .jsonl nach mtime — die aktive Main-Session ist immer
+  // die zuletzt geschriebene Transkript-Datei (kein .reset, kein trajectory).
   try {
-    const cfg = JSON.parse(readFileSync(resolve(import.meta.dirname ?? '.', '..', '..', '..', '.openclaw/openclaw.json'), 'utf-8'))
-    return cfg.gateway?.auth?.token || ''
+    let best: string | null = null
+    let bestM = 0
+    for (const f of readdirSync(dir)) {
+      if (!f.endsWith('.jsonl') || f.includes('.reset.') || f.includes('trajectory')) continue
+      const full = join(dir, f)
+      const mt = statSync(full).mtimeMs
+      if (mt > bestM) { bestM = mt; best = f }
+    }
+    if (best) return join(dir, best)
+  } catch { /* fall through */ }
+  // Fallback: sessions.json (kann auf stale/gelöschte Sessions zeigen)
+  try {
+    const s = JSON.parse(readFileSync(join(dir, 'sessions.json'), 'utf-8'))
+    const candidates = [
+      s?.main?.sessionId,
+      s?.['agent:main:main']?.sessionId,
+s?.['agent:main:telegram:default:direct:8212064283']?.sessionId,
+    ].filter(Boolean) as string[]
+    for (const sid of candidates) {
+      const f = join(dir, `${sid}.jsonl`)
+      if (existsSync(f)) return f
+    }
+  } catch { /* give up */ }
+  return null
+}
+
+function extractMainSummary(maxChars = 1200): string {
+  try {
+    const file = resolveMainSessionFile()
+    if (!file || !existsSync(file)) return ''
+    const lines = readFileSync(file, 'utf-8').trimEnd().split('\n').slice(-150)
+    const recent: { role: string; text: string }[] = []
+    for (const line of lines) {
+      try {
+        const d = JSON.parse(line)
+        const m = d?.message ?? d
+        const role = m?.role
+        if (role !== 'user' && role !== 'assistant') continue
+        let c = m?.content
+        if (Array.isArray(c)) c = c.map((x: any) => x?.text ?? '').join(' ')
+        const text = String(c ?? '').trim()
+        if (!text) continue
+        // System-/Kanal-Rauschen rausfiltern
+        if (/^\[System\]|^\[Kontext-Update|^\[audio |^NO_REPLY$|^\[Subagent|^\[cron|^OpenClaw heartbeat|^\[Heartbeat/.test(text)) continue
+        // Tool-/Meta-Blöcke ignorieren
+        if (/^<{2,}|^```/.test(text)) continue
+        recent.push({ role, text })
+      } catch { /* skip line */ }
+    }
+    if (!recent.length) return ''
+    const last = recent.slice(-20)
+    const convo = last.map(x => `${x.role === 'user' ? 'Adrian' : 'Shiho'}: ${x.text.slice(0, 300)}`).join('\n')
+    const stamp = new Date().toISOString()
+    const summary = `Kontext-Update (${stamp}): Letzte Aktivität in Shiho's Hauptsession (Telegram):\n${convo}`
+    return summary.length > maxChars ? summary.slice(summary.length - maxChars) : summary
   } catch { return '' }
 }
 
-async function syncAvatarSessionContext() {
+function writeBriefingForAvatar() {
   try {
-    const token = GATEWAY_TOKEN || readGatewayToken()
-    if (!token) return
-    const resp = await fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'x-openclaw-agent-id': 'main',
-        'x-openclaw-session-key': 'main',
-      },
-      body: JSON.stringify({
-        model: 'openclaw',
-        stream: false,
-        messages: [{
-          role: 'user',
-          content: '[System] Automatischer Sync alle 10 Minuten: Fasse in maximal 3-4 kurzen Sätzen zusammen, woran Adrian und du gerade arbeiten und was aktuell wichtig ist. Schreibe es als Notiz AN DICH SELBST in einer zukünftigen Session ("Kontext-Update: ..."). Keine Begrüßung, keine Frage, keine Erklärung — nur die Notiz. Falls es nichts Neues gibt: "Kontext-Update: keine Änderungen."',
-        }],
-      }),
-      signal: AbortSignal.timeout(300000),
-    })
-    if (!resp.ok) {
-      console.error(`[context-sync] Gateway ${resp.status}`)
-      return
-    }
-    const data: any = await resp.json()
-    const summary = data?.choices?.[0]?.message?.content?.trim()
+    const summary = extractMainSummary()
     if (!summary) return
-    console.log(`[context-sync] Injected briefing into ${CHAT_SESSION_KEY}: "${summary.slice(0, 100)}..."`)
-    // Inject into the avatar session so the 3D-Shiho knows what's going on.
-    // Fire-and-forget: response is irrelevant.
-    void fetch(`http://127.0.0.1:${GATEWAY_PORT}/v1/chat/completions`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
-        'x-openclaw-agent-id': 'main',
-        'x-openclaw-session-key': CHAT_SESSION_KEY,
-      },
-      body: JSON.stringify({
-        model: 'openclaw',
-        stream: false,
-        messages: [{
-          role: 'system',
-          content: `[Kontext-Update von Shiho's Hauptsession (Telegram)]\n${summary}\n\n(Merke dir das still — antworte nur mit "ok")`,
-        }],
-      }),
-      signal: AbortSignal.timeout(120000),
-    }).catch(() => {})
+    writeFileSync(BRIEFING_PATH, summary)
+    console.log(`[context-sync] Briefing written (${summary.length} chars) -> ${BRIEFING_PATH}`)
   } catch (e: any) {
     console.error(`[context-sync] ${e?.message || e}`)
   }
 }
 
+
+function readBriefingContext(maxAgeMs = 15 * 60_000): string | null {
+  try {
+    if (!existsSync(BRIEFING_PATH)) return null
+    if (Date.now() - statSync(BRIEFING_PATH).mtimeMs > maxAgeMs) return null
+    const text = readFileSync(BRIEFING_PATH, 'utf-8').trim()
+    if (!text) return null
+    return `[Kontext-Update von Shiho's Hauptsession (Telegram)]\n${text}\n(Nur Kontext zur Orientierung — nicht aktiv ansprechen.)`
+  } catch { return null }
+}
+
 function startSessionSync() {
   if (!SESSION_SYNC_ENABLED) return
-  setInterval(() => { void syncAvatarSessionContext() }, SESSION_SYNC_INTERVAL_MS)
-  console.log(`[context-sync] Session sync started (every ${SESSION_SYNC_INTERVAL_MS / 60000}min → ${CHAT_SESSION_KEY})`)
+  setInterval(writeBriefingForAvatar, SESSION_SYNC_INTERVAL_MS)
+  console.log(`[context-sync] Session sync started (every ${SESSION_SYNC_INTERVAL_MS / 60000}min, transcript-based)`)
   // First sync after 2 minutes, not immediately at boot
-  setTimeout(() => { void syncAvatarSessionContext() }, 2 * 60_000)
+  setTimeout(writeBriefingForAvatar, 2 * 60_000)
 }
 
 
@@ -2077,6 +2108,13 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
     ]
   } else {
     messages = [{ role: 'system', content: conversationDirective }, ...messages]
+  }
+
+  // ── Kontext-Briefing aus der Telegram-Main-Session (10min Sync) ──
+  const briefing = readBriefingContext()
+  if (briefing) {
+    messages = [{ role: 'system', content: briefing }, ...messages]
+    console.log('[context-sync] Briefing injected into chat pipeline')
   }
 
   /* ── Streaming-audio mode ──────────────────────────────────────── */
