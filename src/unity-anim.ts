@@ -360,21 +360,22 @@ export function applyPose(vrm: VRM, pose: ConvertedPose): void {
   for (const [bone, q] of pose.rotations) {
     const node = humanoid.getNormalizedBoneNode(bone as never)
     if (!node) continue
-    // Multiply rest pose (T-pose local quat) by the delta rotation
-    const rest = new THREE.Quaternion().copy(node.quaternion)
-    const delta = new THREE.Quaternion(q[0], q[1], q[2], q[3])
-    // For IK-derived world rotations we stored the final LOCAL rotation, not
-    // a delta — set directly:
+    if (![q[0], q[1], q[2], q[3]].every(Number.isFinite)) continue // NaN guard
+    // IK-derived values ARE final local rotations — set directly
     node.quaternion.set(q[0], q[1], q[2], q[3])
- void rest; void delta
   }
   for (const [bone, p] of pose.positions) {
     const node = humanoid.getNormalizedBoneNode(bone as never)
     if (!node) continue
-    // hips: rootT gives the avatar-space hips position; use as local offset
-    // from normalized root. We add rest position (normalized rig keeps rest
-    // position in node.position).
-    node.position.set(p[0] + node.userData.__restX, p[1] + node.userData.__restY, p[2] + node.userData.__restZ)
+    // hips: rest position was cached via storeRestPositions at load (or in playUnityPose)
+    const rx = node.userData.__restX ?? node.position.x
+    const ry = node.userData.__restY ?? node.position.y
+    const rz = node.userData.__restZ ?? node.position.z
+    node.position.set(
+      Number.isFinite(p[0]) ? p[0] + rx : rx,
+      Number.isFinite(p[1]) ? p[1] + ry : ry,
+      Number.isFinite(p[2]) ? p[2] + rz : rz,
+    )
   }
 }
 

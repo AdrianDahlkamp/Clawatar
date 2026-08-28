@@ -29,8 +29,6 @@ export async function initUnityPoses(): Promise<void> {
     select.appendChild(opt)
   }
 
-  storeRestPositions(state.vrm!)  // vrm is guaranteed loaded before UI init in practice
-
   playBtn.addEventListener('click', () => {
     const vrm = state.vrm
     if (!vrm) { console.warn('[unity-poses] No VRM loaded'); return }
@@ -40,14 +38,32 @@ export async function initUnityPoses(): Promise<void> {
   })
 }
 
+// suspend idle/animation system while a unity pose is showing (moved below initUnityPoses)
+
+/** Freeze flag: while true, the idle/blinking/animation systems must not touch bones.
+ *  Set for 10s after applying a unity pose. */
+export function isUnityPoseHolding(): boolean {
+  return performance.now() < poseHoldUntil
+}
+let poseHoldUntil = 0
+
 export async function playUnityPose(path: string, vrm: NonNullable<typeof state.vrm>): Promise<void> {
   try {
     const resp = await fetch(path)
     if (!resp.ok) throw new Error(`fetch ${resp.status}`)
     const text = await resp.text()
     const parsed = parseUnityAnim(text)
+    // cache rest positions now if the VRM-load hook missed them (race-safe)
+    storeRestPositions(vrm)
     const pose = convertPose(parsed, vrm)
+
+    // Freeze the animation system: kill all running actions so the idle loop
+    // doesn't overwrite our pose every frame. Hold for 10s, then idle resumes.
+    state.mixer?.stopAllAction()
+    poseHoldUntil = performance.now() + 10000
+
     applyPose(vrm, pose)
+    vrm.humanoid.update()
     console.log(`[unity-poses] Applied pose: ${parsed.name} (${pose.rotations.size} bones)`)
   } catch (e) {
     console.error('[unity-poses] Failed:', e)

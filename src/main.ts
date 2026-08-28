@@ -7,6 +7,7 @@ import { updateLipSync } from './lip-sync'
 import { applyExpressionOverrides, updateExpressionTransitions } from './expressions'
 import { connectWS, initChatAndVoice, initNativeSyncReceiver } from './ws-control'
 import { initUI } from './ui'
+import { isUnityPoseHolding } from './unity-poses-ui'
 import { loadVRM } from './vrm-loader'
 import { DEFAULT_BASE_IDLE_ACTION, playBaseIdle, preloadAction } from './animation'
 import { updateBreathing } from './breathing'
@@ -625,12 +626,17 @@ function animate() {
   const delta = clock.getDelta()
   const elapsed = clock.elapsedTime
 
-  if (state.mixer) state.mixer.update(delta)
-  updateBreathing(delta)
-  updateExpressionTransitions(delta)
-  applyExpressionOverrides()
-  updateBlink(elapsed)
-  updateLipSync()
+  // Unity-Pose-Hold: mixer + idle/blink aus, solange eine Pose angezeigt wird
+  const poseHold = isUnityPoseHolding()
+
+  if (state.mixer && !poseHold) state.mixer.update(delta)
+  if (!poseHold) {
+    updateBreathing(delta)
+    updateExpressionTransitions(delta)
+    applyExpressionOverrides()
+    updateBlink(elapsed)
+    updateLipSync()
+  }
   if (state.vrm) {
     state.vrm.update(delta)
 
