@@ -335,6 +335,77 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
 })
 
 // --- TTS generation (Shiho voice via qwentts.cpp tts-server, OpenAI-compatible) ---
+/**
+ * ECHTES TTS-Streaming (29.08.2026, Adrian-Wunsch): tts-server (qwentts.cpp) liefert
+ * bei response_format "pcm" rohe s16le-24kHz-Chunks WÄHREND der Generierung
+ * (chunked HTTP, erster Chunk nach ~0.1s, RTF ~0.2). Wir lesen den Stream und
+ * broadcasten jeden Chunk als base64 audio_chunk an die Clients.
+ *
+ * Client (streaming-audio.ts) spielt PCM-Chunks via WebAudio-Queue sofort ab.
+ */
+const PCM_SAMPLE_RATE = 24000
+
+async function streamTtsPcmToClients(
+  text: string,
+  broadcastToClients: (msg: any) => void,
+): Promise<{ bytes: number; firstChunkMs: number }> {
+  const startTime = Date.now()
+  await ensureTtsServer()
+
+  const resp = await fetch(`${TTS_URL}/v1/audio/speech`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ input: text.trim(), voice: TTS_VOICE, response_format: 'pcm', seed: 1001 }),
+    signal: AbortSignal.timeout(300000),
+  })
+  if (!resp.ok || !resp.body) {
+    const body = await resp.text().catch(() => '')
+    throw new Error(`TTS pcm stream error (${resp.status}): ${body.slice(0, 200)}`)
+  }
+
+  broadcastToClients({ type: 'audio_start' })
+  const reader = resp.body.getReader()
+  let total = 0
+  let firstChunkMs = 0
+  let leftover = Buffer.alloc(0) // für 2-byte-Alignment (s16le)
+  let sendBuffer = Buffer.alloc(0) // Sammel-Buffer für größere Chunks
+  const MIN_CHUNK_BYTES = 4800 // 100ms bei 24kHz s16le → mindestens 100ms pro WS-Frame
+
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    if (!value || value.length === 0) continue
+    let buf = Buffer.concat([leftover, Buffer.from(value)])
+    const usable = buf.length - (buf.length % 2)
+    leftover = buf.subarray(usable)
+    buf = buf.subarray(0, usable)
+    if (buf.length === 0) continue
+    total += buf.length
+    if (firstChunkMs === 0) firstChunkMs = Date.now() - startTime
+    // Chunks sammeln bis mindestens MIN_CHUNK_BYTES erreicht sind → weniger WS-Frames, flüssigere Wiedergabe
+    sendBuffer = Buffer.concat([sendBuffer, buf])
+    if (sendBuffer.length >= MIN_CHUNK_BYTES) {
+      broadcastToClients({
+        type: 'audio_chunk',
+        audio: sendBuffer.toString('base64'),
+        sampleRate: PCM_SAMPLE_RATE,
+      })
+      sendBuffer = Buffer.alloc(0)
+    }
+  }
+  // Rest-Buffer flushen
+  if (sendBuffer.length > 0) {
+    broadcastToClients({ type: 'audio_chunk', audio: sendBuffer.toString('base64'), sampleRate: PCM_SAMPLE_RATE })
+  }
+  if (leftover.length > 0) {
+    total += leftover.length
+    broadcastToClients({ type: 'audio_chunk', audio: leftover.toString('base64'), sampleRate: PCM_SAMPLE_RATE })
+  }
+  broadcastToClients({ type: 'audio_end' })
+  console.log(`[pcm-stream] ${total} bytes (${(total / (PCM_SAMPLE_RATE * 2)).toFixed(2)}s audio), first chunk ${firstChunkMs}ms, total ${Date.now() - startTime}ms`)
+  return { bytes: total, firstChunkMs }
+}
+
 async function synthesizeToFile(text: string, fileName?: string): Promise<string> {
   // Lazy (re)start: erste Anfrage nach Unload startet tts-server im VRAM
   await ensureTtsServer()
@@ -948,6 +1019,7 @@ async function twoPhaseStreamingPipeline(
   messages: Array<{ role: string; content: any }>,
   sessionKey: string = 'vrm-chat',
   broadcastFn: (audioUrl: string, text: string, isAck: boolean) => void,
+  pcmBroadcastFn?: (text: string, isAck: boolean) => Promise<void>,
 ): Promise<{ text: string; audioUrl: string; firstAudioMs: number; ackSent: boolean }> {
   // Prepend voice-mode system prompt
   messages = [{ role: 'system', content: getVoiceSystemPrompt() }, ...messages]
@@ -998,8 +1070,12 @@ async function twoPhaseStreamingPipeline(
     // Phase 1: immediately TTS and broadcast the first sentence
     console.log(`[two-phase] Gap detected (>${GAP_THRESHOLD_MS}ms) — broadcasting ack: "${firstSentence.text.slice(0, 40)}"`)
     try {
-      const ackAudioUrl = await generateTTS(firstSentence.text)
-      broadcastFn(ackAudioUrl, firstSentence.text, true)
+      if (pcmBroadcastFn) {
+        await pcmBroadcastFn(firstSentence.text, true)
+      } else {
+        const ackAudioUrl = await generateTTS(firstSentence.text)
+        broadcastFn(ackAudioUrl, firstSentence.text, true)
+      }
       ackSent = true
       console.log(`[two-phase] Ack broadcast at ${Date.now() - startTime}ms`)
     } catch (e: any) {
@@ -1049,8 +1125,12 @@ async function twoPhaseStreamingPipeline(
       const chunkText = chunkTexts[i]!
       if (!chunkText.trim()) continue
       try {
-        const audioUrl = await generateTTS(chunkText)
-        broadcastFn(audioUrl, chunkText, false)
+        if (pcmBroadcastFn) {
+          await pcmBroadcastFn(chunkText, false)
+        } else {
+          const audioUrl = await generateTTS(chunkText)
+          broadcastFn(audioUrl, chunkText, false)
+        }
         console.log(`[chained-tts] chunk ${i + 1}/${chunkTexts.length} broadcast at ${Date.now() - startTime}ms`)
       } catch (e: any) {
         console.error(`[chained-tts] chunk ${i + 1} TTS failed: ${e.message}`)
@@ -1102,20 +1182,18 @@ async function streamingAudioPipeline(
     return { text: fullText, firstChunkMs: 0 }
   }
 
-  /* ── 2. Local TTS (Qwen3-TTS voice clone) ── */
-  const audioUrl = await generateTTS(fullText)
-  const firstChunkMs = Date.now() - startTime
-
-  /* ── 3. Broadcast as speak_audio — client already handles this ── */
+  /* ── 2. ECHTES TTS-Streaming: pcm chunks vom tts-server, live an Clients ── */
   const { action_id, expression, expression_weight } = pickAction(fullText)
   broadcastToClients({
-    type: 'speak_audio', audio_url: audioUrl, text: fullText,
+    type: 'speak_text',
+    text: fullText,
     action_id, expression, expression_weight,
   })
+  await streamTtsPcmToClients(fullText, broadcastToClients)
 
   const totalMs = Date.now() - startTime
-  console.log(`[stream-audio] Done in ${totalMs}ms (first audio: ${firstChunkMs}ms): "${fullText.slice(0, 80)}"`)
-  return { text: fullText, firstChunkMs }
+  console.log(`[stream-audio] Done in ${totalMs}ms (pcm-streamed): "${fullText.slice(0, 80)}"`)
+  return { text: fullText, firstChunkMs: 0 }
 }
 
 /**
@@ -2352,11 +2430,22 @@ async function handleUserSpeech(text: string, senderWs: WebSocket, sourceDevice?
       broadcast({ type: 'speak_audio', audio_url: audioUrl, text, action_id, expression, expression_weight })
       console.log(`[two-phase] ${isAck ? 'ACK' : 'MAIN'} broadcast: ${action_id}, text: "${text.slice(0, 50)}"`)
     }
+    // PCM-Streaming-Variante: statt speak_audio full-wav → text-Event + live audio_chunk-Strom
+    const pcmBroadcastFn = async (text: string, isAck: boolean) => {
+      markInteractionResponded()
+      const { action_id, expression, expression_weight } = isAck
+        ? { action_id: '88_Thinking', expression: 'neutral', expression_weight: 0.5 }
+        : pickAction(text)
+      broadcast({ type: 'speak_text', text, action_id, expression, expression_weight })
+      await streamTtsPcmToClients(text, broadcast)
+      console.log(`[two-phase] ${isAck ? 'ACK' : 'MAIN'} pcm-streamed: ${action_id}, text: "${text.slice(0, 50)}"`)
+    }
 
     const { text: response, audioUrl, firstAudioMs, ackSent } = await twoPhaseStreamingPipeline(
       messages,
       CHAT_SESSION_KEY,
       broadcastFn,
+      pcmBroadcastFn,
     )
 
     const baseStyledResponse = enforceConversationResponseStyle(response, {

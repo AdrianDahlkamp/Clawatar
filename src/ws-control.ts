@@ -358,6 +358,28 @@ async function handleCommand(cmd: any, options: HandleCommandOptions = {}) {
         }
         break
       }
+      case 'speak_text': {
+        // Server streamt gleich die Audio-Chunks (audio_start/audio_chunk/audio_end).
+        // Nur UI + Animation — kein eigenes Audio-Laden.
+        if (cmd.text) addMessage('avatar', cmd.text)
+        const stActionId = cmd.action_id
+        let stExpr = cmd.expression
+        let stExprW = cmd.expression_weight
+        if (!stExpr && cmd.text) {
+          const emo = detectEmotion(cmd.text)
+          if (emo.primary !== 'neutral') {
+            stExpr = emo.expression
+            stExprW = emo.expressionWeight
+          }
+        }
+        if (stActionId) await requestAction(stActionId, { sync: false })
+        if (stExpr) {
+          const { setExpression } = await import('./expressions')
+          setExpression(stExpr, stExprW ?? 0.8, undefined, { sync: false })
+        }
+        break
+      }
+
       /* ── streaming audio (voice/chat mode) ── */
       case 'audio_start': {
         // Begin streaming playback — sets up MSE + analyser + animation
@@ -377,7 +399,7 @@ async function handleCommand(cmd: any, options: HandleCommandOptions = {}) {
         break
       }
       case 'audio_chunk': {
-        if (cmd.audio) streamingPlayer.feedChunk(cmd.audio)
+        if (cmd.audio) streamingPlayer.feedChunk(cmd.audio, cmd.sampleRate)
         break
       }
       case 'audio_end': {

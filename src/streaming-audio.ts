@@ -26,6 +26,13 @@ class StreamingAudioPlayer {
   private _playing = false
   private useMSE: boolean
 
+  // ── PCM-Modus (29.08.2026): qwen-tts.cpp liefert s16le-24kHz-Chunks als base64 ──
+  private pcmCtx: AudioContext | null = null
+  private pcmQueue: Float32Array[] = []
+  private pcmReadOffset = 0
+  private pcmCurrent: AudioBufferSourceNode | null = null
+  private pcmNextStartTime = 0
+
   constructor() {
     this.useMSE =
       typeof MediaSource !== 'undefined' &&
@@ -40,6 +47,10 @@ class StreamingAudioPlayer {
     this._playing = true
     this.queue = []
     this.fallbackChunks = []
+    this.pcmQueue = []
+    this.pcmReadOffset = 0
+    this.pcmNextStartTime = 0
+    this.pcmPendingChunks = []
 
     this.ctx = new AudioContext()
     if (this.ctx.state === 'suspended') await this.ctx.resume()
@@ -55,8 +66,24 @@ class StreamingAudioPlayer {
     setStreamingAnalyser(true, this.analyser)
   }
 
-  feedChunk(base64: string): void {
+  feedChunk(base64: string, sampleRate?: number): void {
+    // PCM-Erkennung: audio_chunk mit sampleRate (rohes s16le-PCM, kein RIFF/MP3).
+    // Erster PCM-Chunk aktiviert den Modus nachträglich → ctx wurde in startStream
+    // ohnehin schon erzeugt, die WebAudio-Queue übernimmt ab da.
     const buf = b64ToBuffer(base64)
+    if (sampleRate === 24000 || this.pcmModeArmed) {
+      this.pcmModeArmed = true
+      // WICHTIG: ensurePcmCtx ist async, aber feedPcm muss garantiert danach laufen.
+      // Wenn ctx schon existiert (Normalfall nach startStream), ist ensurePcmCtx synchron.
+      // Für den ersten Chunk: Puffer im pcmQueueBuffer, dann flushen.
+      this.pcmPendingChunks.push(buf)
+      void this.ensurePcmCtx().then(() => {
+        while (this.pcmPendingChunks.length > 0) {
+          this.feedPcm(this.pcmPendingChunks.shift()!)
+        }
+      })
+      return
+    }
     if (this.useMSE && this.sourceBuffer) {
       this.queue.push(buf)
       this.flush()
@@ -65,9 +92,87 @@ class StreamingAudioPlayer {
     }
   }
 
+  /** Aktiviert den PCM-Modus für den NÄCHSTEN Stream (vom Server via sampleRate signalisiert). */
+  markPcmMode(): void {
+    this.pcmModeArmed = true
+  }
+
+  private pcmModeArmed = false
+  private pcmPendingChunks: ArrayBuffer[] = []
+
+  private async ensurePcmCtx(): Promise<void> {
+    if (!this.pcmCtx) {
+      this.pcmCtx = this.ctx ?? new AudioContext()
+      if (this.pcmCtx.state === 'suspended') await this.pcmCtx.resume()
+    }
+  }
+
+  private feedPcm(buf: ArrayBuffer): void {
+    // s16le → f32 [-1, 1]
+    const s16 = new Int16Array(buf)
+    const f32 = new Float32Array(s16.length)
+    for (let i = 0; i < s16.length; i++) f32[i] = s16[i] / 32768
+    this.pcmQueue.push(f32 as Float32Array<ArrayBuffer>)
+    void this.trySchedulePcm()
+  }
+
+  private scheduledSeconds = 0
+
+  private async trySchedulePcm(): Promise<void> {
+    const ctx = this.pcmCtx
+    if (!ctx || !this.analyser) return
+    await this.ensurePcmCtx()
+    // Pre-Roll: bis 800ms voraus planen (war 300ms → zu klein, causing gaps)
+    const PRE_ROLL = 0.8
+    while (this.pcmQueue.length > 0) {
+      const now = ctx.currentTime
+      // Wenn wir hinterherhinken: nahtlos an currentTime anschließen (kein Gap!)
+      if (this.pcmNextStartTime < now) {
+        this.pcmNextStartTime = now
+      }
+      if (this.pcmNextStartTime - now > PRE_ROLL) break // genug gepuffert
+      const f32 = this.pcmQueue.shift()!
+      const audioBuf = ctx.createBuffer(1, f32.length, 24000)
+      audioBuf.copyToChannel(f32 as unknown as Float32Array<ArrayBuffer>, 0)
+      const srcNode = ctx.createBufferSource()
+      srcNode.buffer = audioBuf
+      srcNode.connect(this.analyser!)
+      srcNode.start(this.pcmNextStartTime)
+      this.pcmNextStartTime += audioBuf.duration
+      srcNode.onended = () => { void this.checkPcmDrained() }
+      this.pcmCurrent = srcNode
+      this.scheduledSeconds += audioBuf.duration
+    }
+  }
+
+  private async checkPcmDrained(): Promise<void> {
+    if (
+      this.streamEnded &&
+      this.pcmQueue.length === 0 &&
+      this.pcmCtx &&
+      this.pcmNextStartTime - this.pcmCtx.currentTime <= 0.02
+    ) {
+      // alles ausgespielt → endStream-Resolver feuern
+      for (const r of this.pcmEndedResolvers.splice(0)) r()
+    }
+  }
+
+  private pcmEndedResolvers: Array<() => void> = []
+
   /** Signal that no more chunks are coming. Resolves when audio finishes. */
   endStream(): Promise<void> {
     this.streamEnded = true
+
+    // PCM-Modus: warten bis Queue + scheduling abgelaufen sind
+    if (this.pcmCtx && !this.useMSE) {
+      return new Promise<void>((resolve) => {
+        // Sofort prüfen (kurze Streams können schon fertig sein)
+        void this.checkPcmDrained()
+        this.pcmEndedResolvers.push(() => { this.finish(); resolve() })
+        // Safety-Timeout
+        setTimeout(() => { this.finish(); resolve() }, 120_000)
+      })
+    }
 
     if (this.useMSE) {
       return new Promise<void>((resolve) => {
@@ -200,6 +305,16 @@ class StreamingAudioPlayer {
     this.elSrc = null
     this.sourceBuffer = null
     this.mediaSource = null
+    // PCM-Zustand zurücksetzen (nicht pcmCtx closen: kann identisch mit this.ctx sein)
+    try { this.pcmCurrent?.stop() } catch {}
+    this.pcmCurrent = null
+    this.pcmQueue = []
+    this.pcmReadOffset = 0
+    this.pcmNextStartTime = 0
+    this.pcmEndedResolvers = []
+    this.pcmModeArmed = false
+    this.pcmPendingChunks = []
+    this.scheduledSeconds = 0
     if (this.analyser) try { this.analyser.disconnect() } catch {}
     this.analyser = null
     if (this.ctx) try { this.ctx.close() } catch {}

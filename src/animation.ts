@@ -16,7 +16,7 @@ let currentAction: AnimationAction | null = null
 let currentActionKey: string | null = null
 let baseIdleAction: AnimationAction | null = null
 export let currentCategory: string = 'idle'
-export const DEFAULT_BASE_IDLE_ACTION = 'dm_128'
+export const DEFAULT_BASE_IDLE_ACTION = '119_Idle'
 
 /** Scale factor for crossfade duration. Higher = slower transitions. Adjust via WS or console. */
 export let crossfadeScale = 1.2
