@@ -49,6 +49,86 @@ const TTS_URL = process.env.SHIHO_TTS_URL || 'http://127.0.0.1:8766'
 const TTS_LANGUAGE = config.voice?.language || 'German'
 const TTS_VOICE = process.env.SHIHO_TTS_VOICE || 'shiho'
 
+// --- VRM Auto-Unload (Adrian 29.08.2026): Modelle aus dem VRAM hauen, wenn niemand zuguckt ---
+// - qwen-tts (tts-server, Port 8766): Prozess stoppen nach UNLOAD_DELAY_MS ohne Client,
+//   lazy wieder starten bei der ersten TTS-Anfrage.
+// - gemma4:e4b (Ollama, Intent-Klassifikator): keep_alive: 0 im Request → Ollama
+//   entlädt das Modell selbst direkt nach jedem Call.
+const TTS_SERVER_CMD = process.env.SHIHO_TTS_SERVER_CMD
+  || '/home/adrian/qwentts.cpp/build/tts-server --model /home/adrian/qwentts.cpp/models/qwen-talker-1.7b-base-Q8_0.gguf --codec /home/adrian/qwentts.cpp/models/qwen-tokenizer-12hz-F32.gguf --alias shiho-tts --host 127.0.0.1 --port 8766 --lang German'
+const TTS_SERVER_CWD = process.env.SHIHO_TTS_SERVER_CWD || '/home/adrian/qwentts.cpp'
+const TTS_VOICE_REF_PATH = process.env.SHIHO_TTS_VOICE_REF || join(process.env.HOME || '/home/adrian', 'qwen_tts_voice_reference.wav')
+const TTS_VOICE_REF_TEXT = process.env.SHIHO_TTS_VOICE_REF_TEXT
+  || 'Wir müssen eben akzeptieren, dass wir keine Kontrolle über die Zeit haben. Natürlich könnten wir versuchen mit Gewalt Kontrolle auszuüben.'
+const UNLOAD_DELAY_MS = Number(process.env.SHIHO_TTS_UNLOAD_DELAY_MS || 60000)
+let ttsServerProc: ReturnType<typeof import('child_process').spawn> | null = null
+let ttsStarting: Promise<void> | null = null
+let ttsUnloadTimer: ReturnType<typeof setTimeout> | null = null
+
+function scheduleTtsUnload() {
+  if (ttsUnloadTimer) clearTimeout(ttsUnloadTimer)
+  ttsUnloadTimer = setTimeout(() => {
+    ttsUnloadTimer = null
+    if (clients.size > 0) { scheduleTtsUnload(); return }   // jemand ist wieder da → weiterlaufen lassen
+    if (!ttsServerProc) return
+    console.log(`[vram] no clients for ${UNLOAD_DELAY_MS / 1000}s → stopping tts-server (unloading qwen-tts from VRAM)`)
+    try { ttsServerProc.kill('SIGTERM') } catch {}
+    ttsServerProc = null
+  }, UNLOAD_DELAY_MS)
+}
+
+async function ensureTtsServer(): Promise<void> {
+  if (await ttsHealth()) return
+  if (ttsStarting) return ttsStarting
+  ttsStarting = (async () => {
+    try {
+      if (ttsServerProc) { try { ttsServerProc.kill('SIGKILL') } catch {}; ttsServerProc = null }
+      console.log(`[vram] client present but tts-server down → cold-starting qwen-tts (kann einen Moment dauern)`)
+      const { spawn } = await import('child_process')
+      ttsServerProc = spawn('/bin/bash', ['-c', TTS_SERVER_CMD], { cwd: TTS_SERVER_CWD, stdio: 'ignore', detached: false })
+      ttsServerProc.on('exit', () => { if (ttsServerProc) ttsServerProc = null })
+      // Auf Health warten (Kaltstart: Modell-Load von Disk)
+      for (let i = 0; i < 120; i++) {
+        await new Promise(r => setTimeout(r, 1000))
+        if (await ttsHealth()) {
+          console.log(`[vram] tts-server ready after ~${i + 1}s`)
+          await registerShihoVoice()
+          return
+        }
+      }
+      throw new Error('tts-server did not become healthy within 120s')
+    } finally {
+      ttsStarting = null
+    }
+  })()
+  return ttsStarting
+}
+
+async function registerShihoVoice(): Promise<void> {
+  // Der Base-Talker hat keine eingebauten Speaker — Shiho-Stimme als Voice-Clone-Ref registrieren.
+  // Muss nach jedem tts-server-(Kalt)start passieren, das Voice-Registry lebt nur im Prozess.
+  try {
+    const wav = readFileSync(TTS_VOICE_REF_PATH)
+    const resp = await fetch(`${TTS_URL}/v1/audio/voices`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ name: TTS_VOICE, wav_b64: wav.toString('base64'), ref_text: TTS_VOICE_REF_TEXT }),
+      signal: AbortSignal.timeout(120000),
+    })
+    if (!resp.ok) throw new Error(`voice register failed (${resp.status}): ${(await resp.text()).slice(0, 200)}`)
+    console.log(`[vram] voice '${TTS_VOICE}' registered on tts-server`)
+  } catch (e: any) {
+    console.error(`[vram] voice registration failed: ${e.message}`)
+  }
+}
+
+function noteClientActivity() {
+  if (clients.size > 0) {
+    // Clients da → Unload-Timer (neu) anwerfen; er feuert nur, wenn clients.size wieder 0 bleibt
+    scheduleTtsUnload()
+  }
+}
+
 async function ttsHealth(): Promise<boolean> {
   try {
     const resp = await fetch(`${TTS_URL}/health`, { signal: AbortSignal.timeout(3000) })
@@ -231,6 +311,8 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
 
 // --- TTS generation (Shiho voice via qwentts.cpp tts-server, OpenAI-compatible) ---
 async function synthesizeToFile(text: string, fileName?: string): Promise<string> {
+  // Lazy (re)start: erste Anfrage nach Unload startet tts-server im VRAM
+  await ensureTtsServer()
   const resp = await fetch(`${TTS_URL}/v1/audio/speech`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -388,6 +470,7 @@ async function classifyIntent(text: string): Promise<IntentClass> {
         prompt,
         stream: false,
         options: { num_predict: 6, temperature: 0, num_ctx: 2048 },
+        keep_alive: 0,  // VRM Auto-Unload: Klassifikator sofort nach dem Call entladen
         think: false,  // gemma4 denkt sonst endlos → leere Antwort bei num_predict=6
       }),
       signal: AbortSignal.timeout(4000),
@@ -3377,6 +3460,7 @@ wss.on('connection', (ws, req) => {
 
   clients.add(ws)
   console.log(`Client connected (${clients.size} total)`)
+  noteClientActivity()
 
   ws.on('message', async (data) => {
     // Handle binary audio data from Chrome extension
@@ -3818,6 +3902,10 @@ wss.on('connection', (ws, req) => {
 
   ws.on('close', () => {
     clients.delete(ws)
+    if (clients.size === 0) {
+      console.log(`[vram] last client gone → tts-server unload in ${UNLOAD_DELAY_MS / 1000}s (no-op if someone reconnects)`)
+      scheduleTtsUnload()
+    }
     // Remove from device registry
     for (const [id, info] of devices) {
       if (info.ws === ws) {
@@ -3830,6 +3918,9 @@ wss.on('connection', (ws, req) => {
     console.log(`Client disconnected (${clients.size} total)`)
   })
 })
+
+// Boot: niemand verbunden → Unload-Timer direkt anwerfen (falls tts-server läuft)
+scheduleTtsUnload()
 
 console.log(`WebSocket server running on ws://${SERVER_HOST}:${WS_PORT}`)
 if (ENFORCE_LOOPBACK_WS_CLIENTS) {
