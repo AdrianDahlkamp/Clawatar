@@ -489,6 +489,7 @@ let idleTimer: ReturnType<typeof setInterval> | null = null
 function startIdleLoop() {
   if (idleTimer) return
   idleTimer = setInterval(() => {
+    void (async () => {
     try {
       if (Date.now() - moodSetAt > MOOD_DECAY_MS && currentMood !== 'neutral') {
         setMood('neutral')
@@ -549,6 +550,7 @@ function startIdleLoop() {
     } catch (e: any) {
       console.error(`[idle] loop error: ${e?.message || e}`)
     }
+    })()
   }, IDLE_CHECK_INTERVAL_MS)
   console.log('[idle] Idle behavior loop started')
 }
