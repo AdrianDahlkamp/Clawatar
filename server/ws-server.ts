@@ -334,26 +334,60 @@ audioServer.listen(AUDIO_PORT, SERVER_HOST, () => {
 async function synthesizeToFile(text: string, fileName?: string): Promise<string> {
   // Lazy (re)start: erste Anfrage nach Unload startet tts-server im VRAM
   await ensureTtsServer()
-  const resp = await fetch(`${TTS_URL}/v1/audio/speech`, {
-    method: 'POST',
-    headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ input: text.trim(), voice: TTS_VOICE, response_format: 'wav' }),
-    signal: AbortSignal.timeout(120000),
-  })
 
-  if (!resp.ok) {
-    const body = await resp.text()
-    throw new Error(`TTS server error (${resp.status}): ${body.slice(0, 300)}`)
+  // Adrian 29.08.2026: „da war nur ein kleiner Atemer zu hören, nicht der ganze Satz“.
+  // Root Cause: TTS-Sampling (temp 0.9) fängt gelegentlich zu früh EOS → 0.08s-Fragmente.
+  // Fix: Längen-Sanity-Check + Retry mit anderem Seed. Erwartete Mindestdauer ~0.35s/Word
+  // (Deutsch), Retry bis 3x, danach letzten Versuch trotzdem ausspielen (best effort).
+  const words = text.trim().split(/\s+/).filter(Boolean).length
+  const minSeconds = Math.max(0.35, words * 0.30)
+  const MAX_ATTEMPTS = 3
+  let lastBuffer: Buffer | null = null
+  let lastDuration = 0
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    const resp = await fetch(`${TTS_URL}/v1/audio/speech`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        input: text.trim(),
+        voice: TTS_VOICE,
+        response_format: 'wav',
+        // Default-Modell-Sampling (temp 0.9), aber expliziter Seed pro Versuch:
+        // deterministische Unterscheidung der Retries, kein Dauer-Zufall.
+        seed: 1000 + attempt,
+      }),
+      signal: AbortSignal.timeout(120000),
+    })
+
+    if (!resp.ok) {
+      const body = await resp.text()
+      throw new Error(`TTS server error (${resp.status}): ${body.slice(0, 300)}`)
+    }
+
+    const buffer = Buffer.from(await resp.arrayBuffer())
+    if (!buffer.length) throw new Error('TTS server returned an empty body')
+
+    // WAV-Dauer parsen (RIFF): fmt @ 24 bytes offset, data size @ last 4-byte header
+    let duration = 0
+    try {
+      const sampleRate = buffer.readUInt32LE(24)
+      const byteRate = buffer.readUInt32LE(28)
+      duration = byteRate > 0 ? buffer.length / byteRate : 0
+    } catch {}
+    lastBuffer = buffer
+    lastDuration = duration
+
+    if (duration >= minSeconds) break
+    console.warn(`[tts] attempt ${attempt}/${MAX_ATTEMPTS}: audio ${duration.toFixed(2)}s < expected ${minSeconds.toFixed(2)}s ("${text.trim().slice(0, 40)}") → EOS-zu-früh-Fragment, retry mit neuem Seed`)
   }
 
-  // tts-server returns a full RIFF wav — stream it into the audio cache
-  const buffer = Buffer.from(await resp.arrayBuffer())
-  if (!buffer.length) throw new Error('TTS server returned an empty body')
+  const buffer = lastBuffer!
   const name = fileName ?? `${randomUUID()}.wav`
   writeFileSync(join(AUDIO_CACHE_DIR, name), buffer)
   pruneCache()
   const url = `${getAudioBaseURL()}/audio/${name}`
-  console.log(`[tts] synthesized ${buffer.length} bytes (${(buffer.length / 48000).toFixed(2)}s audio) -> ${name}`)
+  console.log(`[tts] synthesized ${buffer.length} bytes (${(buffer.length / 48000).toFixed(2)}s audio${lastDuration < minSeconds ? ', STILL SHORT after retries' : ''}) -> ${name}`)
   return url
 }
 
