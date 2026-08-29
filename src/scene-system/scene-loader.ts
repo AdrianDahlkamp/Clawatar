@@ -145,7 +145,7 @@ const SCENE_CONFIGS: Record<string, {
     // Adrian (29.08.2026): 1.5m weiter hinten im Raum — erste Richtung war falsch,
     // korrekt: Raum -1.5z (Char steht relativ vorderer... nein: näher an Möbel der
     // +Z-Seite = hinten, Blick von Kamera) → final per Feedback: -1.62
-    modelOffset: [-0.32, 0, -1.62],
+    modelOffset: [-3.32, 0, -1.62],
     // Adrian (28.08.2026): Raumsicht-Winkel = Raum-Rotation, NICHT Kamera.
     // Kamera bleibt frontal auf den Avatar; der Raum zeigt seine Ecke im 135°-Winkel.
     roomRotation: Math.PI * 0.75,
