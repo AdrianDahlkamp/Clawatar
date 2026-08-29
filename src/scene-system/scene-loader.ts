@@ -666,6 +666,8 @@ export async function loadRoomGLB(glbPath: string, opts?: {
 
   // Suppress backgrounds
   suppressBackgrounds(true)
+  // Boot-Reste entfernen (Petals etc.), sonst frieren sie im Raum ein (Adrian-Report 29.08.)
+  clearThemeParticles()
 
   // Look up per-scene config by filename (strip "scenes/" prefix and ".glb" suffix)
   const sceneName = glbPath.replace(/^scenes\//, '').replace(/\.glb$/, '')
