@@ -204,6 +204,11 @@ async function handleSyncCommand(cmd: any) {
         }
       }
 
+      // Debug-Label: macht Idle-Actions in der Konsole identifizierbar
+      if (actionId && loop) {
+        console.log(`[IDLE-ACTION] ${actionId}`)
+      }
+
       if (expression) {
         setExpression(expression, expressionWeight, undefined, { sync: false })
       } else {
