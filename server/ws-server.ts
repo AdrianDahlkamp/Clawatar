@@ -3988,7 +3988,7 @@ async function killOrphanTtsServer() {
   if (await ttsHealth()) {
     console.log(`[vram] orphan tts-server on 8766 found at boot → killing (will lazy-restart on first TTS request)`)
     const { execSync } = await import('child_process')
-    try { execSync(`fuser -k 8766/tcp`, { timeout: 5000, stdio: 'ignore' }) } catch {}
+    try { execSync(`lsof -t -i :8766 | xargs -r kill`, { timeout: 5000, stdio: 'ignore' }) } catch {}
   }
 }
 killOrphanTtsServer()
