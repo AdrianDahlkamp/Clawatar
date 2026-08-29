@@ -181,15 +181,15 @@ function updateInstancedPetals(elapsed: number, delta: number) {
   const d = instancedData
   for (let i = 0; i < d.count; i++) {
     const i3 = i * 3
-    // Fall
-    d.positions[i3 + 1] -= d.velocities[i] * delta
-    // Sway — wider, slower drift
-    d.positions[i3] += Math.sin(elapsed * 0.3 + d.phases[i]) * 0.004
-    d.positions[i3 + 2] += Math.cos(elapsed * 0.2 + d.phases[i]) * 0.003
-    // Tumble rotation
-    d.rotations[i3] += d.rotSpeeds[i3] * delta
-    d.rotations[i3 + 1] += d.rotSpeeds[i3 + 1] * delta
-    d.rotations[i3 + 2] += d.rotSpeeds[i3 + 2] * delta
+    // Fall — real sakura speed (~0.4-0.7 m/s), previously 0.008-0.023 (2.5min per drop!)
+    d.positions[i3 + 1] -= (d.velocities[i] * 18.0) * delta
+    // Sway — pendling horizontal drift (petals zigzag on the way down)
+    d.positions[i3] += Math.sin(elapsed * 1.4 + d.phases[i]) * 0.028
+    d.positions[i3 + 2] += Math.cos(elapsed * 0.9 + d.phases[i] * 1.7) * 0.02
+    // Tumble rotation — lively, per-axis distinct (petals don't spin uniformly)
+    d.rotations[i3] += (d.rotSpeeds[i3] + 0.5) * delta
+    d.rotations[i3 + 1] += (d.rotSpeeds[i3 + 1] + 0.35) * delta
+    d.rotations[i3 + 2] += (d.rotSpeeds[i3 + 2] + 0.5) * delta
     // Reset if below ground
     if (d.positions[i3 + 1] < Y_MIN) {
       d.positions[i3] = (Math.random() - 0.5) * X_BOUND * 2
@@ -428,7 +428,7 @@ function createInstancedPetals(count: number): THREE.InstancedMesh {
     const [x, y, z] = randomInBounds()
     const i3 = i * 3
     positions[i3] = x; positions[i3 + 1] = y; positions[i3 + 2] = z
-    velocities[i] = 0.008 + Math.random() * 0.015
+    velocities[i] = 0.022 + Math.random() * 0.018  // effective fall: ×18 → ~0.4-0.72 m/s
     phases[i] = Math.random() * Math.PI * 2
     rotations[i3] = Math.random() * Math.PI * 2
     rotations[i3 + 1] = Math.random() * Math.PI * 2
