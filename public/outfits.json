@@ -3,50 +3,90 @@
   "checkIntervalSec": 300,
   "outfits": [
     {
-      "id": "morning-sleepy",
-      "label": "Schlafsachen ☕ (morgens)",
+      "id": "morning",
+      "label": "Schlafsachen 💤 (5-9)",
       "start": 5,
       "end": 9,
       "days": "all",
-      "model": "./models/shiho-morning.vrm"
+      "model": "./models/shiho-morning1.vrm"
     },
     {
       "id": "work",
-      "label": "Arbeitsklamotten 💼",
+      "label": "Arbeit 💼 (9-18 Mo-Fr)",
       "start": 9,
       "end": 18,
       "days": "weekdays",
-      "model": "./models/shiho-morning.vrm"
+      "model": "./models/shiho-v2.vrm"
     },
     {
-      "id": "weekend-day",
-      "label": "Freizeit (Wochenende) 🌈",
+      "id": "weekend",
+      "label": "Wochenende 🌈 (9-18 Sa/So)",
       "start": 9,
       "end": 18,
       "days": "weekends",
-      "model": "./models/shiho-morning.vrm"
+      "model": "./models/shiho-v2.vrm"
     },
     {
-      "id": "evening-jogging",
-      "label": "Jogginghose 🛋️ (abends)",
+      "id": "evening",
+      "label": "Abend 🛋️ (18-22)",
       "start": 18,
       "end": 22,
       "days": "all",
-      "model": "./models/shiho-morning.vrm"
+      "model": "./models/shiho-evening1.vrm"
     },
     {
       "id": "night",
-      "label": "Nachtmensch 🌙",
+      "label": "Nachtrunde 🌙 (22-5)",
       "start": 22,
       "end": 5,
       "days": "all",
-      "model": "./models/shiho-morning.vrm"
+      "model": "./models/shiho-latenight.vrm"
+    },
+    {
+      "id": "christmas",
+      "label": "Weihnachten 🎅",
+      "start": 0,
+      "end": 0,
+      "days": "all",
+      "model": "./models/shiho-christmas.vrm"
+    },
+    {
+      "id": "newyear",
+      "label": "Neujahr 🎍",
+      "start": 0,
+      "end": 0,
+      "days": "all",
+      "model": "./models/shiho-newyear.vrm"
+    },
+    {
+      "id": "fancy",
+      "label": "Besondere Anlässe 💜",
+      "start": 0,
+      "end": 0,
+      "days": "all",
+      "model": "./models/shiho-v2.vrm"
     }
   ],
   "specialDates": [
     {
+      "date": "2026-12-24",
+      "outfitId": "christmas"
+    },
+    {
+      "date": "2026-12-25",
+      "outfitId": "christmas"
+    },
+    {
+      "date": "2026-12-31",
+      "outfitId": "newyear"
+    },
+    {
+      "date": "2027-01-01",
+      "outfitId": "newyear"
+    },
+    {
       "date": "2026-09-18",
-      "outfitId": "morning-sleepy"
+      "outfitId": "fancy"
     }
   ]
 }
