@@ -470,7 +470,11 @@ async function classifyIntent(text: string): Promise<IntentClass> {
         prompt,
         stream: false,
         options: { num_predict: 6, temperature: 0, num_ctx: 2048 },
-        keep_alive: 0,  // VRM Auto-Unload: Klassifikator sofort nach dem Call entladen
+        // VRM Auto-Unload: 60s idle → Ollama entlädt selbst. NICHT 0, sonst cold-load
+        // bei jedem Call (Klassifikator-Timeout ist 4s — da passt kein Modell-Laden rein).
+        // Timer resettet pro Request: während eines Chats bleibt das Modell warm,
+        // 60s nach der letzten Nachricht fliegt es raus.
+        keep_alive: '60s',
         think: false,  // gemma4 denkt sonst endlos → leere Antwort bei num_predict=6
       }),
       signal: AbortSignal.timeout(4000),
