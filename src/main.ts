@@ -26,6 +26,7 @@ import { initAmbientMusic, getMusicState, toggleMusic } from './ambient-music'
 import { initAmbienceMixer } from './ambience-mixer'
 import { state } from './app-state'
 import { persistModelURL, resolveAutoLoadModelURL, warmConversationActions } from './viewer-autoload'
+import { resolveAutoLoadOutfitURL, startOutfitWatcher, initOutfitScheduler } from './outfit-scheduler'
 
 // Debug: expose state + scene for console material inspection
 ;(window as any).__app_state = state
@@ -135,7 +136,9 @@ async function autoLoad() {
     return
   }
 
-  const modelUrl = await resolveAutoLoadModelURL()
+  // Outfit-Scheduler zuerst fragen (tageszeitabhängige Modelle),
+  // Fallback: klassische Auto-Load-Kette (config → localStorage)
+  const modelUrl = (await resolveAutoLoadOutfitURL()) ?? (await resolveAutoLoadModelURL())
 
   if (modelUrl && !isBgOnly) {
     try {
@@ -162,6 +165,13 @@ async function autoLoad() {
 
       // Warm common conversational actions after first frame is ready.
       warmConversationActions(preloadAction)
+
+      // Outfit-Watcher: prüft periodisch, ob das Tageszeit-Modell wechseln muss
+      initOutfitScheduler({
+        loadVRM,
+        playBaseIdle: () => playBaseIdle(DEFAULT_BASE_IDLE_ACTION),
+      })
+      startOutfitWatcher()
 
       // Auto-load room GLB if ?room= param is set, otherwise default room
       const roomParam = params.get('room') ?? 'new-room'  // Default: der neue Raum (Adrian, 28.08.2026)

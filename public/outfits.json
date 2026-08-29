@@ -1,0 +1,52 @@
+{
+  "enabled": true,
+  "checkIntervalSec": 300,
+  "outfits": [
+    {
+      "id": "morning-sleepy",
+      "label": "Schlafsachen ☕ (morgens)",
+      "start": 5,
+      "end": 9,
+      "days": "all",
+      "model": "./models/shiho-morning.vrm"
+    },
+    {
+      "id": "work",
+      "label": "Arbeitsklamotten 💼",
+      "start": 9,
+      "end": 18,
+      "days": "weekdays",
+      "model": "./models/shiho-morning.vrm"
+    },
+    {
+      "id": "weekend-day",
+      "label": "Freizeit (Wochenende) 🌈",
+      "start": 9,
+      "end": 18,
+      "days": "weekends",
+      "model": "./models/shiho-morning.vrm"
+    },
+    {
+      "id": "evening-jogging",
+      "label": "Jogginghose 🛋️ (abends)",
+      "start": 18,
+      "end": 22,
+      "days": "all",
+      "model": "./models/shiho-morning.vrm"
+    },
+    {
+      "id": "night",
+      "label": "Nachtmensch 🌙",
+      "start": 22,
+      "end": 5,
+      "days": "all",
+      "model": "./models/shiho-morning.vrm"
+    }
+  ],
+  "specialDates": [
+    {
+      "date": "2026-09-18",
+      "outfitId": "morning-sleepy"
+    }
+  ]
+}
