@@ -58,8 +58,10 @@ const TTS_SERVER_CMD = process.env.SHIHO_TTS_SERVER_CMD
   || '/home/adrian/qwentts.cpp/build/tts-server --model /home/adrian/qwentts.cpp/models/qwen-talker-1.7b-base-Q8_0.gguf --codec /home/adrian/qwentts.cpp/models/qwen-tokenizer-12hz-F32.gguf --alias shiho-tts --host 127.0.0.1 --port 8766 --lang German'
 const TTS_SERVER_CWD = process.env.SHIHO_TTS_SERVER_CWD || '/home/adrian/qwentts.cpp'
 const TTS_VOICE_REF_PATH = process.env.SHIHO_TTS_VOICE_REF || join(process.env.HOME || '/home/adrian', 'qwen_tts_voice_reference.wav')
-const TTS_VOICE_REF_TEXT = process.env.SHIHO_TTS_VOICE_REF_TEXT
-  || 'Wir müssen eben akzeptieren, dass wir keine Kontrolle über die Zeit haben. Natürlich könnten wir versuchen mit Gewalt Kontrolle auszuüben.'
+// ⚠️ KEIN ref_text mitschicken! (29.08.2026: Registrierung MIT ref_text verhunzt den Subtalker — Nur-Atemer-Fragmente.
+// Gestrige funktionierende Registrierung (/tmp/voice-shiho.json) war {name, wav_b64} OHNE ref_text → volle Sätze.)
+// Falls doch nötig: SHIHO_TTS_VOICE_REF_TEXT setzen (leer = nicht senden).
+const TTS_VOICE_REF_TEXT = process.env.SHIHO_TTS_VOICE_REF_TEXT || ''
 const UNLOAD_DELAY_MS = Number(process.env.SHIHO_TTS_UNLOAD_DELAY_MS || 60000)
 let ttsServerProc: ReturnType<typeof import('child_process').spawn> | null = null
 let ttsStarting: Promise<void> | null = null
@@ -133,7 +135,9 @@ async function registerShihoVoice(): Promise<void> {
     const resp = await fetch(`${TTS_URL}/v1/audio/voices`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ name: TTS_VOICE, wav_b64: wav.toString('base64'), ref_text: TTS_VOICE_REF_TEXT }),
+      body: JSON.stringify(TTS_VOICE_REF_TEXT
+        ? { name: TTS_VOICE, wav_b64: wav.toString('base64'), ref_text: TTS_VOICE_REF_TEXT }
+        : { name: TTS_VOICE, wav_b64: wav.toString('base64') }),
       signal: AbortSignal.timeout(120000),
     })
     if (!resp.ok) throw new Error(`voice register failed (${resp.status}): ${(await resp.text()).slice(0, 200)}`)
@@ -340,7 +344,10 @@ async function synthesizeToFile(text: string, fileName?: string): Promise<string
   // Fix: Längen-Sanity-Check + Retry mit anderem Seed. Erwartete Mindestdauer ~0.35s/Word
   // (Deutsch), Retry bis 3x, danach letzten Versuch trotzdem ausspielen (best effort).
   const words = text.trim().split(/\s+/).filter(Boolean).length
-  const minSeconds = Math.max(0.35, words * 0.30)
+  // Kalibriert 29.08. natürliches Tempo: "Ich schau mal, was ich machen kann" (6 W) = 1.76s real.
+  // 0.30s/Wort war zu streng (legite Sätze als Fragment verworfen). 0.20s/Wort + 0.25s Floor
+  // fängt 0.08-0.3s Atemer zuverlässig ab, ohne legitime kurze Sätze zu rekurseln.
+  const minSeconds = Math.max(0.25, words * 0.20)
   const MAX_ATTEMPTS = 3
   let lastBuffer: Buffer | null = null
   let lastDuration = 0
@@ -3991,18 +3998,24 @@ async function killOrphanTtsServer() {
     try { execSync(`lsof -t -i :8766 | xargs -r kill`, { timeout: 5000, stdio: 'ignore' }) } catch {}
   }
 }
-killOrphanTtsServer()
+
+// Serialisierter Boot: erst Orphan-Cleanup, DANN pregen (sonst startet pregen einen
+// frischen tts-server, den der orphan-kill nachträglich totmacht → "unknown voice")
+async function bootTtsLifecycle() {
+  await killOrphanTtsServer()
+  await pregenerateAudio()
+}
+void bootTtsLifecycle()
+
+// --- Shiho personality layer startup ---
+startIdleLoop()
+startSessionSync()
 
 console.log(`WebSocket server running on ws://${SERVER_HOST}:${WS_PORT}`)
 if (ENFORCE_LOOPBACK_WS_CLIENTS) {
   console.log(`[ws-guard] Listening on ${SERVER_HOST} (loopback-only: ${ENFORCE_LOOPBACK_WS_CLIENTS}). Set CLAWATAR_LOOPBACK_ONLY_WS=1 to restrict to localhost.`)
 }
 logNetworkEndpoints()
-
-// --- Shiho personality layer startup ---
-startIdleLoop()
-startSessionSync()
-void pregenerateAudio()
 
 // stdin relay
 process.stdin.setEncoding('utf-8')
