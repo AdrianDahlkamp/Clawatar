@@ -825,6 +825,12 @@ function applyLighting(name: BackgroundPreset) {
   lightingRig.bounce.intensity = preset.bounce[1]
 }
 
+/** Public: remove all background particles without touching theme/lighting state. */
+export function clearThemeParticles() {
+  clearParticles()
+  particlePreset = 'default'
+}
+
 function clearParticles() {
   if (activeParticles) {
     scene.remove(activeParticles)

@@ -2,7 +2,7 @@ import * as THREE from 'three'
 import { scene, renderer, camera, controls, teardownRoomBloom } from '../scene'
 import { getAsset, loadGLB } from './asset-registry'
 import { disableRoomMode, isRoomMode } from '../room-scene'
-import { suppressBackgrounds } from '../backgrounds'
+import { suppressBackgrounds, clearThemeParticles } from '../backgrounds'
 import type { SceneDescription, SceneObject, LightOverride } from './scene-types'
 
 // 5-step gradient for visible anime cel-shading bands
@@ -536,6 +536,9 @@ export async function loadScene(desc: SceneDescription): Promise<() => void> {
 
   // Suppress the backgrounds system (stops it from overriding scene.background)
   suppressBackgrounds(true)
+  // Remove stale boot-time particles (e.g. sakura petals created before room load)
+  // — otherwise they freeze mid-air inside the room. Reported by Adrian, 29.08. 🌸
+  clearThemeParticles()
 
   setCssOverlayVisibility(false)
 
