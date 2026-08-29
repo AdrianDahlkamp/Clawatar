@@ -142,7 +142,9 @@ const SCENE_CONFIGS: Record<string, {
     // Skaliert nicht nötig — GLB nutzt 1.0 Einheiten = Meter
     // charPos: freie Stelle laut GLB-Möbel-Analyse (1.3m Clearance) bei three (1.82, 0.12)
     // → Raum wird verschoben, damit der Avatar genau dort steht (Raummitte, nichts clippt)
-    modelOffset: [-1.82, 0, -0.12],
+    // Adrian (29.08.2026): 1.5m weiter hinten im Raum stehen — Raum +1.5z schieben,
+    // Charakter landet relativ tiefer im Raum (von der Kamera aus weiter weg)
+    modelOffset: [-1.82, 0, +1.38],
     // Adrian (28.08.2026): Raumsicht-Winkel = Raum-Rotation, NICHT Kamera.
     // Kamera bleibt frontal auf den Avatar; der Raum zeigt seine Ecke im 135°-Winkel.
     roomRotation: Math.PI * 0.75,
