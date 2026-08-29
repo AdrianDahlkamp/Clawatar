@@ -3946,6 +3946,19 @@ wss.on('connection', (ws, req) => {
 // Boot: niemand verbunden → Unload-Timer direkt anwerfen (falls tts-server läuft)
 scheduleTtsUnload()
 
+// Boot-Cleanup: Läuft bereits ein tts-server (z.B. manueller Start oder Vorheriger
+// WS-Server-Neustart hat das Handle verloren), kennen wir sein Handle nicht und
+// der normale Unload-Kill würde ihn verpassen. Beim Start sauber übernehmen: Orphan
+// auf Port 8766 killen — er wird bei Bedarf lazy neu gestartet (mit Voice-Registrierung).
+async function killOrphanTtsServer() {
+  if (await ttsHealth()) {
+    console.log(`[vram] orphan tts-server on 8766 found at boot → killing (will lazy-restart on first TTS request)`)
+    const { execSync } = await import('child_process')
+    try { execSync(`fuser -k 8766/tcp`, { timeout: 5000, stdio: 'ignore' }) } catch {}
+  }
+}
+killOrphanTtsServer()
+
 console.log(`WebSocket server running on ws://${SERVER_HOST}:${WS_PORT}`)
 if (ENFORCE_LOOPBACK_WS_CLIENTS) {
   console.log(`[ws-guard] Listening on ${SERVER_HOST} (loopback-only: ${ENFORCE_LOOPBACK_WS_CLIENTS}). Set CLAWATAR_LOOPBACK_ONLY_WS=1 to restrict to localhost.`)
