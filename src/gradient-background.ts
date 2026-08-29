@@ -178,18 +178,8 @@ vec3 renderTheme(float themeId, vec2 uv, float t, vec3 top, vec3 mid, vec3 botto
     float stain = smoothstep(-0.45, 0.55, wc + wc2 * 0.6 + (uv.y - 0.5) * 0.35);
     color = mix(bottom, top * 0.98, stain);
 
-    vec3 bokeh = vec3(0.0);
-    for (int i = 0; i < 5; i++) {
-      float fi = float(i);
-      vec2 c = vec2(
-        0.1 + hash21(vec2(fi, 1.0)) * 0.8 + sin(t * (0.18 + fi * 0.025) + fi * 2.7) * 0.14,
-        0.15 + hash21(vec2(fi, 9.0)) * 0.7 + cos(t * (0.15 + fi * 0.03) + fi * 1.9) * 0.10
-      );
-      float r = 0.06 + hash21(vec2(fi, 5.0)) * 0.08;
-      float orb = softCircle(uv, c, r, r * 0.85);
-      bokeh += vec3(0.98, 0.78, 0.82) * orb * (0.05 + 0.04 * hash21(vec2(fi, 3.0)));
-    }
-    color += bokeh;
+    // Bokeh-Orbs entfernt (Adrian, 29.08.): floaten zu starr, wirken wie eingefrorene Kirschblüten
+    void 0;
   } else if (themeId < 1.5) {
     // Pulsing sun glow
     float pulse = sin(t * 0.8) * 0.5 + 0.5;
