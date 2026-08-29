@@ -741,6 +741,14 @@ function applyBackgroundScene(name: BackgroundPreset) {
   clearTexture()
   applyLighting(name)
 
+  // Wenn ein 3D-Raum geladen ist (scene-loader hat uns suppressed), dürfen
+  // KEINE neuen Partikel gespawnt werden — sonst frieren sie unsichtbar
+  // mitten im Raum ein (Adrian-Report 29.08: starre Kirschblüten).
+  if (_suppressedByScene) {
+    particlePreset = 'default'
+    return
+  }
+
   const transparent = isTransparentMode()
   const skipSceneBg = isGradientBackgroundActive() || transparent
   if (skipSceneBg) {
