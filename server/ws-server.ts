@@ -864,6 +864,10 @@ async function* streamFromGateway(
       'Authorization': `Bearer ${GATEWAY_TOKEN}`,
       'x-openclaw-agent-id': 'main',
       'x-openclaw-session-key': sessionKey,
+      // GLM-5.3-flash streamt bei thinking=medium sein Reasoning ALS content
+      // ("Simple math question..." statt Antwort) → TTS liest den Denk-Prefix vor.
+      // Voice-Mode läuft deshalb fix auf glm-5.2:cloud (kein Reasoning-Leak, gestern getestet).
+      'x-openclaw-model': process.env.CLAWATAR_VOICE_MODEL || 'ollama/glm-5.2:cloud',
     },
     body: JSON.stringify({ model: 'openclaw', stream: true, messages }),
   })
@@ -1077,6 +1081,10 @@ async function streamingAudioPipeline(
       'Authorization': `Bearer ${GATEWAY_TOKEN}`,
       'x-openclaw-agent-id': 'main',
       'x-openclaw-session-key': sessionKey,
+      // GLM-5.3-flash streamt bei thinking=medium sein Reasoning ALS content
+      // ("Simple math question..." statt Antwort) → TTS liest den Denk-Prefix vor.
+      // Voice-Mode läuft deshalb fix auf glm-5.2:cloud (kein Reasoning-Leak, gestern getestet).
+      'x-openclaw-model': process.env.CLAWATAR_VOICE_MODEL || 'ollama/glm-5.2:cloud',
     },
     body: JSON.stringify({ model: 'openclaw', stream: false, messages }),
   })
