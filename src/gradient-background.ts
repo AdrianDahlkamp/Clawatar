@@ -179,7 +179,6 @@ vec3 renderTheme(float themeId, vec2 uv, float t, vec3 top, vec3 mid, vec3 botto
     color = mix(bottom, top * 0.98, stain);
 
     // Bokeh-Orbs entfernt (Adrian, 29.08.): floaten zu starr, wirken wie eingefrorene Kirschblüten
-    void 0;
   } else if (themeId < 1.5) {
     // Pulsing sun glow
     float pulse = sin(t * 0.8) * 0.5 + 0.5;
