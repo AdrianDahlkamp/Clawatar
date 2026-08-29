@@ -303,23 +303,40 @@ const FILLER_DEEP = [
 // Adrian: „teilweise wäre einfach ein lang gezogenes hmmmm passend“
 const FILLER_SOUND = ['Hmmmm...', 'Mmmh...', 'Mh...', 'Hmmmm, lass mich überlegen...']
 const IDLE_SOUND_PHRASES: Record<string, string[]> = {
-  neutral: ['Hmm.', 'Hm?', 'Hmmmm...'],
-  happy: ['Hihi.', 'La la la~'],
+  neutral: ['Hmm.', 'Hm?', 'Hmmmm...', 'Mh-hm, mh-hm, hmmm~'],
+  happy: ['Hihi.', 'La la la~', 'Lalala, la-la-laaa~ mhm mhm~', 'Doo-doo-doo, dudel-dudel-doo~'],
   curious: ['Hm?', 'Wie interessant...'],
-  tired: ['Haaa...', 'Ich könnte einen Kaffee vertragen.'],
-  sad: ['Haaa...'],
-  excited: ['Ohh!', 'Juhu!'],
+  tired: ['Haaa...', 'Ich könnte einen Kaffee vertragen.', 'Hmmm-hmmm... haa~'],
+  sad: ['Haaa...', 'Hmm-hmmm... hmmm.'],
+  excited: ['Ohh!', 'Juhu!', 'Lalala~ juchhei, so ein Tag, juchhei!'],
   angry: ['Tsss.'],
 }
+// Melodisches Summen — längere Phrasen, eigene Kategorie mit Singing-Animation.
+// Meldodien-Ansatz: Syllables statt Wörter, TTS macht daraus gesummte/ge]'sangte Linien.
+const IDLE_HUMMING_PHRASES = [
+  'Hmmm, hmmm-hmmm, hmmm-hmmm-hmmm, hmmm~',
+  'La la la, la-la-la-la, laaa~ hmm-hmm-hmm',
+  'Mh mh mh, mh-mh mh, mh mh mh-hmmm~',
+  'Dudel-du, dudel-du-du, dudel-dudel-du~ hihi',
+  'Hm hm hm, hm hm, hm-hm-hmm-hm-hmmmm~',
+  'Na na naaa, na-na-na, naaa~ la-la-laaa',
+]
 const IDLE_ACTIONS: Record<string, string[]> = {
-  neutral: ['131_Neck Stretching', '127_Leaning', '119_Idle'],
-  happy: ['116_Happy Hand Gesture', '161_Waving'],
+  neutral: ['131_Neck Stretching', '127_Leaning', '119_Idle', 'dm_82', 'dm_86', 'dm_121', 'dm_123', 'dm_124', 'dm_127'],
+  happy: ['116_Happy Hand Gesture', '161_Waving', 'dm_139', 'dm_24', 'dm_46'],
   curious: ['88_Thinking'],
-  tired: ['131_Neck Stretching', '149_Sitting Idle'],
+  tired: ['131_Neck Stretching', '149_Sitting Idle', 'dm_22'],
   sad: ['142_Sad Idle'],
   excited: ['49_Joyful Jump', '116_Happy Hand Gesture'],
   angry: ['95_Annoyed Head Shake'],
 }
+// Gesummte/animierte Specials — Song-Rotation mit richtiger Singing-Pose
+const IDLE_SONG_PHRASES = [
+  'Lalala~ laaa, la-la-la-laaa~ hm-hm, hm-hmmm~',
+  'Hmmm-hmm-hmmm, hm-hmmm-hmm, hmmm~ doo-doo-doo~',
+  'La-la-la-laaa~ mmm-mmm, mmm-mmm, laaaa~ hihi.',
+]
+const IDLE_SONG_ACTIONS = ['71_Singing', 'dm_97', 'dm_24', '116_Happy Hand Gesture']
 const MOOD_EXPRESSION: Record<string, string> = {
   neutral: 'relaxed', happy: 'happy', curious: 'surprised', tired: 'relaxed',
   sad: 'sad', excited: 'happy', angry: 'angry',
@@ -486,8 +503,25 @@ function startIdleLoop() {
       const actions = IDLE_ACTIONS[mood] || IDLE_ACTIONS.neutral!
       const r = Math.random()
 
-      if (r < 0.45) {
-        // idle sound (pre-generated → instant)
+      // Kategorie-Roulette: 15% Humming (Sing-Pose + längere Melodie),
+      // 30% kurzer Idle-Sound, 55% reine Aktion — mehr Abwechslung als vorher.
+      if (r < 0.15) {
+        // melodisches Summen mit Sing-Animation
+        const allHumming = Math.random() < 0.3 ? IDLE_SONG_PHRASES : IDLE_HUMMING_PHRASES
+        const phrase = allHumming[Math.floor(Math.random() * allHumming.length)]!
+        const action = IDLE_SONG_ACTIONS[Math.floor(Math.random() * IDLE_SONG_ACTIONS.length)]!
+        console.log(`[idle] Humming (${mood}): "${phrase}"`)
+        try {
+          const audioUrl = await generateTTS(phrase)
+          broadcastToAllClients({
+            type: 'speak_audio', audio_url: audioUrl, text: phrase,
+            action_id: action,
+            expression: mood === 'happy' || mood === 'excited' ? 'happy' : 'relaxed',
+            expression_weight: 0.5,
+          })
+        } catch {}
+      } else if (r < 0.45) {
+        // kurzer Idle-Sound (vorgeneriert → instant)
         const phrase = sounds[Math.floor(Math.random() * sounds.length)]!
         const audioUrl = PREGEN_AUDIO.get(phrase)
         console.log(`[idle] Sound (${mood}): "${phrase}"`)
@@ -524,6 +558,7 @@ function startIdleLoop() {
 async function pregenerateAudio() {
   const phrases = [...new Set([
     ...FILLER_TASK, ...FILLER_DEEP, ...FILLER_SOUND,
+    ...IDLE_HUMMING_PHRASES, ...IDLE_SONG_PHRASES,
     ...Object.values(IDLE_SOUND_PHRASES).flat(),
   ])]
   for (const phrase of phrases) {
