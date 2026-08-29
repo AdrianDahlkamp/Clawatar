@@ -65,15 +65,36 @@ let ttsServerProc: ReturnType<typeof import('child_process').spawn> | null = nul
 let ttsStarting: Promise<void> | null = null
 let ttsUnloadTimer: ReturnType<typeof setTimeout> | null = null
 
+async function unloadGemmaFromOllama(): Promise<void> {
+  // Teil 2 des VRM Auto-Unload: nimmt Ollama die Model-Pids aus dem VRAM.
+  // keep_alive: 0 im leeren Generate-Call = "sofort entladen" (Ollama-API-Konvention).
+  try {
+    await fetch(`${OLLAMA_URL}/api/generate`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ model: CLASSIFIER_MODEL, keep_alive: 0 }),
+      signal: AbortSignal.timeout(10000),
+    })
+    console.log(`[vram] gemma (${CLASSIFIER_MODEL}) aus Ollama entladen`)
+  } catch (e: any) {
+    console.error(`[vram] gemma unload failed: ${e.message}`)
+  }
+}
+
 function scheduleTtsUnload() {
   if (ttsUnloadTimer) clearTimeout(ttsUnloadTimer)
-  ttsUnloadTimer = setTimeout(() => {
+  ttsUnloadTimer = setTimeout(async () => {
     ttsUnloadTimer = null
     if (clients.size > 0) { scheduleTtsUnload(); return }   // jemand ist wieder da → weiterlaufen lassen
-    if (!ttsServerProc) return
-    console.log(`[vram] no clients for ${UNLOAD_DELAY_MS / 1000}s → stopping tts-server (unloading qwen-tts from VRAM)`)
+    if (!ttsServerProc) {
+      // tts-server evtl. schon unten — gemma trotzdem unloaden (falls geladen)
+      await unloadGemmaFromOllama()
+      return
+    }
+    console.log(`[vram] no clients for ${UNLOAD_DELAY_MS / 1000}s → unloading: tts-server (kill) + gemma (ollama keep_alive:0)`)
     try { ttsServerProc.kill('SIGTERM') } catch {}
     ttsServerProc = null
+    await unloadGemmaFromOllama()
   }, UNLOAD_DELAY_MS)
 }
 
@@ -470,11 +491,10 @@ async function classifyIntent(text: string): Promise<IntentClass> {
         prompt,
         stream: false,
         options: { num_predict: 6, temperature: 0, num_ctx: 2048 },
-        // VRM Auto-Unload: 60s idle → Ollama entlädt selbst. NICHT 0, sonst cold-load
-        // bei jedem Call (Klassifikator-Timeout ist 4s — da passt kein Modell-Laden rein).
-        // Timer resettet pro Request: während eines Chats bleibt das Modell warm,
-        // 60s nach der letzten Nachricht fliegt es raus.
-        keep_alive: '60s',
+        // Ollama hält gemma dauerhaft warm (-1 = ewig). Entladen macht NICHT Ollama,
+        // sondern unser Client-Idle-Timer (unloadGemmaFromOllama), sobald 60s kein
+        // Browser-Client verbunden ist — dannuridaden wir beide Modelle gemeinsam.
+        keep_alive: -1,
         think: false,  // gemma4 denkt sonst endlos → leere Antwort bei num_predict=6
       }),
       signal: AbortSignal.timeout(4000),
