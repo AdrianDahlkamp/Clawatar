@@ -18,6 +18,30 @@ function getAudioContext(): AudioContext {
   return audioContext
 }
 
+// Browser-Autoplay-Policy: AudioContext bleibt bis zum ersten User-Geste
+// suspended. Bei Idle-Sounds (keine Geste!) würf die resume() sonst ins
+// Leere (Adrian-Log 29.08: 'AudioContext was not allowed to start').
+// Lösung: Exklusives Fallback über HTMLAudioElement — muß sich NICHT an die
+// Context-Regel halten? Doch, tut es auch. Daher:unlock bei erster Geste
+let audioUnlocked = false
+export function installAudioUnlock(): void {
+  if (audioUnlocked) return
+  audioUnlocked = true
+  const unlock = () => {
+    const ctx = getAudioContext()
+    if (ctx.state === 'suspended') {
+      ctx.resume().then(() => console.info('[lip-sync] AudioContext unlocked')).catch(() => {})
+    }
+    window.removeEventListener('pointerdown', unlock, true)
+    window.removeEventListener('keydown', unlock, true)
+  }
+  window.addEventListener('pointerdown', unlock, { capture: true })
+  window.addEventListener('keydown', unlock, { capture: true })
+  window.addEventListener('touchstart', unlock, { capture: true, passive: true })
+  // resume() while suspended without gesture still fails; marks flag so
+  // playAudioLipSync can fall back to an <audio> element path if needed.
+}
+
 function setExpressionIfAvailable(vrm: VRM, name: string, value: number) {
   const manager = vrm.expressionManager
   if (!manager) return
@@ -51,7 +75,13 @@ export function setStreamingAnalyser(playing: boolean, ext: AnalyserNode | null)
  */
 export async function playAudioLipSync(audioUrl: string): Promise<void> {
   const ctx = getAudioContext()
-  if (ctx.state === 'suspended') await ctx.resume()
+  if (ctx.state === 'suspended') {
+    try { await ctx.resume() } catch {}
+  }
+  if (ctx.state !== 'running') {
+    // WebAudio gesperrt (keine User-Geste bisher) → HTMLAudio-Fallback
+    return playViaHtmlAudio(audioUrl)
+  }
 
   // Fetch and decode audio
   const resp = await fetch(audioUrl)
@@ -92,9 +122,40 @@ export function stopAudioLipSync() {
     try { audioSource.stop() } catch {}
     audioSource = null
   }
+  if (htmlAudio) {
+    try { htmlAudio.pause() } catch {}
+    htmlAudio = null
+  }
   audioPlaying = false
   analyser = null
   onAudioEndCallback = null
+}
+
+// ── HTMLAudio-Fallback (Autoplay-Policy-Überlebenslayer) ──────────
+let htmlAudio: HTMLAudioElement | null = null
+async function playViaHtmlAudio(url: string): Promise<void> {
+  stopAudioLipSync()
+  const a = new Audio(url)
+  htmlAudio = a
+  audioPlaying = true
+  console.info('[lip-sync] WebAudio blocked — playing via HTMLAudio fallback')
+  return new Promise<void>((resolve) => {
+    a.onended = () => {
+      if (htmlAudio === a) htmlAudio = null
+      audioPlaying = false
+      resolve()
+    }
+    a.onerror = () => {
+      if (htmlAudio === a) htmlAudio = null
+      audioPlaying = false
+      resolve()
+    }
+    a.play().catch(() => {
+      if (htmlAudio === a) htmlAudio = null
+      audioPlaying = false
+      resolve()
+    })
+  })
 }
 
 export function isAudioPlaying(): boolean {

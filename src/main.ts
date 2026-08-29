@@ -3,7 +3,7 @@ import * as THREE from 'three'
 import { initScene, initContactShadow, updateContactShadow, scene, camera, renderer, controls, clock, composer, outlineEffect, warmTintVRMMaterials, setTransparentBackground, setContactShadowCharacterVisible } from './scene'
 import { initLookAt, updateLookAt, setMeetingLookAt } from './look-at'
 import { updateBlink } from './blink'
-import { updateLipSync } from './lip-sync'
+import { updateLipSync, installAudioUnlock } from './lip-sync'
 import { applyExpressionOverrides, updateExpressionTransitions } from './expressions'
 import { connectWS, initChatAndVoice, initNativeSyncReceiver } from './ws-control'
 import { initUI } from './ui'
@@ -464,6 +464,7 @@ async function init() {
     initNativeSyncReceiver()
   } else {
     initChatAndVoice()
+    installAudioUnlock()
     connectWS()
   }
   if (!disableAutoLoad) {
