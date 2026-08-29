@@ -1132,7 +1132,7 @@ Critical rules:
 5. Use your multimodal memory to be proactive — if you notice something changed or remember a preference, mention it naturally.
 6. Never tell users to manually send WebSocket/gateway JSON commands. If they ask for device speech routing, treat it as an execution request.
 7. Never guess network topology. Do not claim local-vs-relay connection facts unless those facts were explicitly provided in authoritative context.
-8. Reply in the language the user writes in (default: German).`
+8. ALWAYS reply in German — the user speaks German. Only switch if the user explicitly writes in another language. Never start with English meta-commentary like "The user is asking..." — that is internal reasoning and must NEVER be part of the reply.`
 
 /**
  * Build voice system prompt with dynamic multimodal memory context.
@@ -1741,7 +1741,7 @@ function recordConversationState(sourceDeviceKey: string, language: Conversation
 }
 
 function activeCharacterName(): string {
-  return (backendSyncState.profile?.name || 'Reze').trim() || 'Reze'
+  return (backendSyncState.profile?.name || 'Shiho').trim() || 'Shiho'
 }
 
 function buildCharacterPromptContext(): string {
@@ -3045,8 +3045,8 @@ function sendBackendStateSnapshot(target: WebSocket, requester?: string) {
 
 function applyBackendProfileUpdate(patch: Record<string, any>): Record<string, any> {
   const current = backendSyncState.profile || {
-    name: 'Reze',
-    avatarInitials: 'R',
+    name: 'Shiho',
+    avatarInitials: 'S',
     updatedAt: 0,
   }
 
